@@ -1,0 +1,23 @@
+[package]
+name = "tpm2-cli"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90.0"
+license = "Apache-2.0"
+readme = "README.md"
+exclude = [".gitignore", ".gitattributes", ".github/*"]
+
+[[bin]]
+name = "tpm2"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.102"
+clap = { version = "4.5.60", features = ["derive", "env"] }
+flexi_logger = "0.31.8"
+hex = "0.4.3"
+log = "0.4.29"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+thiserror = "2.0.18"
+tss-esapi = "7.6.0"
