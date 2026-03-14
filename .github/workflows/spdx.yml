@@ -4,10 +4,12 @@ on:
   pull_request:
     paths:
       - "src/**"
+      - "tests/**"
       - ".github/workflows/spdx.yml"
   push:
     paths:
       - "src/**"
+      - "tests/**"
       - ".github/workflows/spdx.yml"
   workflow_dispatch:
 

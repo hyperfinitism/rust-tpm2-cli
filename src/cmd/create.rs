@@ -9,11 +9,11 @@ use tss_esapi::attributes::ObjectAttributesBuilder;
 use tss_esapi::interface_types::algorithm::PublicAlgorithm;
 use tss_esapi::interface_types::ecc::EccCurve;
 use tss_esapi::interface_types::key_bits::RsaKeyBits;
-use tss_esapi::traits::Marshall;
 use tss_esapi::structures::{
     EccScheme, HashScheme, KeyDerivationFunctionScheme, Public, PublicBuilder,
     PublicEccParametersBuilder, PublicRsaParametersBuilder, RsaExponent, RsaScheme,
 };
+use tss_esapi::traits::Marshall;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
