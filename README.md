@@ -40,7 +40,16 @@ cargo build -r
 # => ./target/release/tpm2
 ```
 
-### Set up TPM device
+### Set up a native TPM (hardware or vTPM)
+
+This applies to physical TPM chips and virtual TPMs (vTPMs) exposed by
+hypervisors (e.g., QEMU, Hyper-V, Google Cloud vTPM).
+
+> [!CAUTION]
+> Operations on a native TPM can affect the entire system — clearing hierarchies,
+> changing auth values, or modifying NV storage may break measured boot, disk
+> encryption (e.g., BitLocker, LUKS), or remote attestation. Use `swtpm` for
+> development and testing unless you specifically need a native TPM.
 
 ```bash
 # Add current user to tss usergroup
@@ -52,6 +61,43 @@ ls -l /dev/tpm*
 
 # Set TPM device path used by rust-tpm2-cli
 export TPM2TOOLS_TCTI="device:/dev/tpm0"
+```
+
+### Set up swtpm (software TPM simulator)
+
+[swtpm](https://github.com/stefanberger/swtpm) provides a TPM 2.0 simulator
+that runs entirely in user space. It is safe for development, testing, and CI —
+its state is ephemeral and isolated from the host system.
+
+```bash
+sudo apt install -y swtpm
+```
+
+Start the simulator:
+
+```bash
+mkdir -p /tmp/swtpm
+swtpm socket \
+    --tpmstate dir=/tmp/swtpm \
+    --tpm2 \
+    --server type=tcp,port=2321 \
+    --ctrl type=tcp,port=2322 \
+    --flags startup-clear
+
+# In another terminal:
+export TPM2TOOLS_TCTI="swtpm:host=localhost,port=2321"
+```
+
+### Run integration tests
+
+The test suite uses `swtpm`. Each test script starts its own simulator instance
+automatically — no native TPM is needed.
+
+```bash
+sudo apt install -y swtpm   # if not already installed
+
+# Build and run all tests
+bash tests/run_all.sh
 ```
 
 ## Usage
