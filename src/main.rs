@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 mod cli;
 mod cmd;
 mod context;
