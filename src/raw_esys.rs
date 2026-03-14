@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Raw ESYS FFI wrappers for TPM2 commands not yet in tss-esapi.
 //!
 //! tss-esapi 7.6.0 does not wrap `TPM2_Commit` or `TPM2_EC_Ephemeral`.

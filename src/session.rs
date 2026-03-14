@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Session loading and management utilities.
 //!
 //! Functions in this module deal with TPM authorization sessions: loading
