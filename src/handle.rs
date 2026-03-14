@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! TPM handle/object loading utilities.
 //!
 //! Every function here requires a [`tss_esapi::Context`] to resolve a CLI

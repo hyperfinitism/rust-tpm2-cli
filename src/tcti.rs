@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use std::str::FromStr;
 
 use tss_esapi::tcti_ldr::TctiNameConf;

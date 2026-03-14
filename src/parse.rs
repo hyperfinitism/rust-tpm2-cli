@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 //! Pure CLI argument parsers.
 //!
 //! Every function in this module converts a CLI string into a typed value

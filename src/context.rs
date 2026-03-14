@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use tss_esapi::Context;
 
 use crate::error::Tpm2Error;

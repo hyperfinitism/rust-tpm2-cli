@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 use clap::Parser;
 use log::info;
 use tss_esapi::interface_types::key_bits::RsaKeyBits;
