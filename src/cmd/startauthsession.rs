@@ -62,9 +62,7 @@ impl StartAuthSessionCmd {
 
         // Set the audit attribute if --audit-session was requested.
         if self.audit_session {
-            let (attrs, mask) = SessionAttributesBuilder::new()
-                .with_audit(true)
-                .build();
+            let (attrs, mask) = SessionAttributesBuilder::new().with_audit(true).build();
             ctx.tr_sess_set_attributes(session, attrs, mask)
                 .context("failed to set audit attribute on session")?;
         }
