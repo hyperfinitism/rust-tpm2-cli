@@ -60,7 +60,7 @@ newgrp tss
 ls -l /dev/tpm*
 
 # Set TPM device path used by rust-tpm2-cli
-export TPM2TOOLS_TCTI="device:/dev/tpm0"
+export RUST_TPM2_CLI_TCTI="device:/dev/tpm0"
 ```
 
 ### Set up swtpm (software TPM simulator)
@@ -85,7 +85,7 @@ swtpm socket \
     --flags startup-clear
 
 # In another terminal:
-export TPM2TOOLS_TCTI="swtpm:host=localhost,port=2321"
+export RUST_TPM2_CLI_TCTI="swtpm:host=localhost,port=2321"
 ```
 
 ### Run integration tests

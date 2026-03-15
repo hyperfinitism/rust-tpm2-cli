@@ -14,12 +14,12 @@ pub(crate) const DEFAULT_DEVICE_PATH: &str = "/dev/tpm0";
 
 /// Parse a TCTI configuration string into a [`TctiNameConf`].
 ///
-/// If `tcti` is `None`, falls back to the `TPM2TOOLS_TCTI` environment
+/// If `tcti` is `None`, falls back to the `RUST_TPM2_CLI_TCTI` environment
 /// variable, then to `device:/dev/tpm0`.
 pub fn parse_tcti(tcti: Option<&str>) -> Result<TctiNameConf, Tpm2Error> {
     let tcti_str = match tcti {
         Some(s) => s.to_owned(),
-        None => std::env::var("TPM2TOOLS_TCTI").unwrap_or_else(|_| DEFAULT_TCTI.to_owned()),
+        None => std::env::var("RUST_TPM2_CLI_TCTI").unwrap_or_else(|_| DEFAULT_TCTI.to_owned()),
     };
     TctiNameConf::from_str(&tcti_str).map_err(|e| Tpm2Error::InvalidTcti(e.to_string()))
 }
@@ -30,7 +30,7 @@ pub fn parse_tcti(tcti: Option<&str>) -> Result<TctiNameConf, Tpm2Error> {
 pub(crate) fn extract_device_path(tcti: Option<&str>) -> String {
     let tcti_str = match tcti {
         Some(s) => s.to_owned(),
-        None => std::env::var("TPM2TOOLS_TCTI").unwrap_or_else(|_| DEFAULT_TCTI.to_owned()),
+        None => std::env::var("RUST_TPM2_CLI_TCTI").unwrap_or_else(|_| DEFAULT_TCTI.to_owned()),
     };
     if let Some(rest) = tcti_str.strip_prefix("device:") {
         rest.to_owned()
