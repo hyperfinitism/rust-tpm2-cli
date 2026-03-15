@@ -59,7 +59,7 @@ summary() {
     return 0
 }
 
-# Start an swtpm simulator and set TPM2TOOLS_TCTI.
+# Start an swtpm simulator and set RUST_TPM2_CLI_TCTI.
 start_swtpm() {
     TEST_TMPDIR="$(mktemp -d)"
     export TEST_TMPDIR
@@ -84,7 +84,7 @@ start_swtpm() {
         sleep 0.1
     done
 
-    export TPM2TOOLS_TCTI="swtpm:host=localhost,port=${SWTPM_PORT}"
+    export RUST_TPM2_CLI_TCTI="swtpm:host=localhost,port=${SWTPM_PORT}"
 }
 
 # Stop swtpm and clean up.

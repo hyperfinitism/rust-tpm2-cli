@@ -13,6 +13,8 @@ use std::ptr::{null, null_mut};
 use anyhow::{Context, bail};
 use tss_esapi::tss2_esys::*;
 
+use crate::tcti::DEFAULT_TCTI;
+
 // -----------------------------------------------------------------------
 // Raw context helpers
 // -----------------------------------------------------------------------
@@ -27,9 +29,7 @@ impl RawEsysContext {
     pub(crate) fn new(tcti: Option<&str>) -> anyhow::Result<Self> {
         let tcti_str = match tcti {
             Some(s) => s.to_owned(),
-            None => {
-                std::env::var("TPM2TOOLS_TCTI").unwrap_or_else(|_| "device:/dev/tpm0".to_owned())
-            }
+            None => std::env::var("RUST_TPM2_CLI_TCTI").unwrap_or_else(|_| DEFAULT_TCTI.to_owned()),
         };
         let c_str = CString::new(tcti_str.as_str()).context("TCTI string contains NUL")?;
 

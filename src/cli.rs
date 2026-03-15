@@ -18,8 +18,8 @@ pub struct Cli {
 
 #[derive(Parser)]
 pub struct GlobalOpts {
-    /// TCTI configuration (e.g. device:/dev/tpm0, mssim:host=localhost,port=2321)
-    #[arg(short = 'T', long = "tcti", env = "TPM2TOOLS_TCTI")]
+    /// TCTI configuration (e.g. device:/dev/tpm0, swtpm:host=localhost,port=2321)
+    #[arg(short = 'T', long = "tcti", env = "RUST_TPM2_CLI_TCTI")]
     pub tcti: Option<String>,
 
     /// Enable errata fixups
