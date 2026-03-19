@@ -213,7 +213,7 @@ tpm2 checkquote -u ak.ctx -m quote.bin -s sig.bin \
 tpm2 verifysignature -c ak.ctx -g sha256 -m quote.bin -s sig.bin
 ```
 
-### NV manipulation
+### NV indexes
 
 ```bash
 # Define NV index
@@ -230,7 +230,7 @@ tpm2 nvread 0x01400002 -C o
 tpm2 nvundefine 0x01400002 -C o
 ```
 
-### PCR manipulation
+### PCRs
 
 ```bash
 # Read PCR bank
