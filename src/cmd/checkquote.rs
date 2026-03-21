@@ -42,11 +42,11 @@ pub struct CheckQuoteCmd {
     pub hash_algorithm: String,
 
     /// PCR values file for additional verification
-    #[arg(short = 'f', long = "pcr", conflicts_with = "pcr-list")]
+    #[arg(short = 'f', long = "pcr")]
     pub pcr_file: Option<PathBuf>,
 
     /// PCR selection list (e.g. sha256:0,1,2)
-    #[arg(short = 'l', long = "pcr-list", conflicts_with = "pcr")]
+    #[arg(short = 'l', long = "pcr-list")]
     pub pcr_list: Option<String>,
 
     /// Qualification data (hex string) for replay-protection check
@@ -157,7 +157,7 @@ impl CheckQuoteCmd {
                 .with_context(|| format!("reading PCR file: {}", pcr_path.display()))?;
 
             // Hash the raw PCR values to compare with the digest in the
-            // quote.  Use the same algorithm that was used for the quote.
+            // quote. Use the same algorithm that was used for the quote.
             let pcr_buf = MaxBuffer::try_from(pcr_bytes)
                 .map_err(|e| anyhow::anyhow!("PCR data too large: {e}"))?;
 
