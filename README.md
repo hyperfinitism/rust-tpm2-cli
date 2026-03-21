@@ -206,6 +206,7 @@ tpm2 quote -H 0x81000002 -l sha256:0,1,2,3,4,5,6,7 \
 
 # Verify the quote
 tpm2 checkquote -u ak.ctx -m quote.bin -s sig.bin \
+    -l sha256:0,1,2,3,4,5,6,7 \
     --qualification-file nonce.bin \
     -f pcrs.bin
 
