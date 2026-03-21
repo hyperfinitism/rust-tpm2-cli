@@ -258,11 +258,8 @@ The key differences are:
 | - | `rust-tpm2-cli` | `tpm2-tools` |
 | - | --------------- | ------------ |
 | **Language** | Rust | C |
-| **TPM Software Stack (TSS)** | [rust-tss-esapi](https://github.com/parallaxsecond/rust-tss-esapi) | [tpm2-tss](https://github.com/tpm2-software/tpm2-tss) |
-| **Binary size order**\* | several MB | sub MB |
-
-> \* The size of the binary depends on both the version and the build environment.
-> This comparison uses `tpm2-tools` v5.7 and `rust-tpm2-cli` latest (at the time of writing this document).
+| **TPM Software Stack (TSS)** | [rust-tss-esapi](https://github.com/parallaxsecond/rust-tss-esapi)[^1] | [tpm2-tss](https://github.com/tpm2-software/tpm2-tss) |
+| **Binary size order**[^2] | several MB | sub MB |
 
 `tpm2-tools` has a significantly smaller binary footprint, making it a better fit for resource-constrained environments such as IoT devices with limited storage or memory.
 It also benefits from a long track record and broad backward compatibility.
@@ -293,3 +290,11 @@ It also benefits from a long track record and broad backward compatibility.
 
 - The source code is licensed under [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0).
 - The project logo assets are licensed under [CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/).
+
+## Footnotes
+
+[^1]: Note that `rust-tss-esapi` is a Rust wrapper around the C-based `tpm2-tss` library, not a pure Rust implementation.
+Both projects currently depend on the same underlying C library for TPM communication.
+
+[^2]: Approx. 6.5MB (6,523,504B) vs. 0.85MB (850,552B). The actual sizes depend on both the version and the build environment.
+This comparison is based on `rust-tpm2-cli` (commit: `3986a79271c64cbc29a58453d56ebd00e776d1ea`) and `tpm2-tools` (commit: `bc4cf8bca83c15deb62af448f609caa8ba0111da`).
