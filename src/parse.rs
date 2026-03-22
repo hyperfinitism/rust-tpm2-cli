@@ -155,25 +155,62 @@ pub fn parse_auth(value: &str) -> Result<Auth, Tpm2Error> {
 // ---------------------------------------------------------------------------
 
 /// Parse symbolic NV index attributes separated by `|`.
+///
+/// Supported attributes include standard flags (ownerwrite, ownerread, etc.)
+/// and the NV index type via `nt=ordinary`, `nt=counter`, `nt=bits`,
+/// `nt=extend`, `nt=pinfail`, `nt=pinpass`.
+///
+/// Reference:
+/// "Trusted Platform Module 2.0 Library Part 2: Structures" Section 13
+/// https://trustedcomputinggroup.org/wp-content/uploads/Trusted-Platform-Module-2.0-Library-Part-2-Structures_Version-185_pub.pdf
 pub fn parse_nv_attributes(s: &str) -> anyhow::Result<tss_esapi::attributes::NvIndexAttributes> {
+    use tss_esapi::constants::NvIndexType;
+
     let mut builder = NvIndexAttributesBuilder::new();
 
     for attr in s.split('|') {
-        builder = match attr.trim().to_lowercase().as_str() {
-            "ownerwrite" => builder.with_owner_write(true),
-            "ownerread" => builder.with_owner_read(true),
-            "authwrite" => builder.with_auth_write(true),
-            "authread" => builder.with_auth_read(true),
-            "policywrite" => builder.with_policy_write(true),
-            "policyread" => builder.with_policy_read(true),
-            "ppwrite" => builder.with_pp_write(true),
-            "ppread" => builder.with_pp_read(true),
-            "writedefine" => builder.with_write_define(true),
-            "written" => builder.with_written(true),
-            "writeall" => builder.with_write_all(true),
-            "read_stclear" => builder.with_read_stclear(true),
-            "write_stclear" => builder.with_write_stclear(true),
-            "platformcreate" => builder.with_platform_create(true),
+        let trimmed = attr.trim().to_lowercase();
+        // Map NV types to TPM_NT constants (Bits 4-7 of TPMA_NV)
+        if let Some(nt_val) = trimmed.strip_prefix("nt=") {
+            let nv_type = match nt_val {
+                "ordinary" | "0" => NvIndexType::Ordinary,
+                "counter" | "1" => NvIndexType::Counter,
+                "bits" | "2" => NvIndexType::Bits,
+                "extend" | "4" => NvIndexType::Extend,
+                "pinfail" | "8" => NvIndexType::PinFail,
+                "pinpass" | "9" => NvIndexType::PinPass,
+                _ => anyhow::bail!("unknown NV index type: {nt_val}"),
+            };
+            builder = builder.with_nv_index_type(nv_type);
+            continue;
+        }
+        // Map NV attributes to TPMA_NV bits
+        builder = match trimmed.as_str() {
+            "ppwrite" | "pp_write" => builder.with_pp_write(true), // 0
+            "ownerwrite" | "owner_write" => builder.with_owner_write(true), // 1
+            "authwrite" | "auth_write" => builder.with_auth_write(true), // 2
+            "policywrite" | "policy_write" => builder.with_policy_write(true), // 3
+            "policydelete" | "policy_delete" => builder.with_policy_delete(true), // 10
+            "writelocked" | "write_locked" => builder.with_write_locked(true), // 11
+            "writeall" | "write_all" => builder.with_write_all(true), // 12
+            "writedefine" | "write_define" => builder.with_write_define(true), // 13
+            "write_stclear" => builder.with_write_stclear(true),   // 14
+            "globallock" | "global_lock" => builder.with_global_lock(true), // 15
+            "ppread" | "pp_read" => builder.with_pp_read(true),    // 16
+            "ownerread" | "owner_read" => builder.with_owner_read(true), // 17
+            "authread" | "auth_read" => builder.with_auth_read(true), // 18
+            "policyread" | "policy_read" => builder.with_policy_read(true), // 19
+            "noda" | "no_da" => builder.with_no_da(true),          // 25
+            "orderly" => builder.with_orderly(true),               // 26
+            "clear_stclear" => builder.with_clear_stclear(true),   // 27
+            "readlocked" | "read_locked" => builder.with_read_locked(true), // 28
+            "written" => builder.with_written(true),               // 29
+            "platformcreate" | "platform_create" => builder.with_platform_create(true), // 30
+            "read_stclear" => builder.with_read_stclear(true),     // 31
+            // rust-tss-esapi v7.6.0 does not support the following fields:
+            // 32: TPMA_EXTERNAL_NV_ENCRYPTION
+            // 33: TPMA_EXTERNAL_NV_INTEGRITY
+            // 34: TPMA_EXTERNAL_NV_ANTIROLLBACK
             _ => anyhow::bail!("unknown NV attribute: {attr}"),
         };
     }
