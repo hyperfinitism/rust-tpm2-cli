@@ -71,15 +71,17 @@ impl RawEsysContext {
         Ok(())
     }
 
-    /// Resolve a hierarchy string to the well-known ESYS_TR constant.
-    pub(crate) fn resolve_hierarchy(s: &str) -> anyhow::Result<ESYS_TR> {
-        match s.to_lowercase().as_str() {
-            "o" | "owner" => Ok(ESYS_TR_RH_OWNER),
-            "p" | "platform" => Ok(ESYS_TR_RH_PLATFORM),
-            "e" | "endorsement" => Ok(ESYS_TR_RH_ENDORSEMENT),
-            "n" | "null" => Ok(ESYS_TR_RH_NULL),
-            "l" | "lockout" => Ok(ESYS_TR_RH_LOCKOUT),
-            _ => bail!("unknown hierarchy: {s}"),
+    /// Resolve an [`NvAuthEntity`] to an `ESYS_TR` handle, using `nv_handle`
+    /// when the entity is [`NvAuthEntity::NvIndex`].
+    pub(crate) fn resolve_nv_auth_entity(
+        entity: crate::parse::NvAuthEntity,
+        nv_handle: ESYS_TR,
+    ) -> ESYS_TR {
+        use crate::parse::NvAuthEntity;
+        match entity {
+            NvAuthEntity::Owner => ESYS_TR_RH_OWNER,
+            NvAuthEntity::Platform => ESYS_TR_RH_PLATFORM,
+            NvAuthEntity::NvIndex => nv_handle,
         }
     }
 

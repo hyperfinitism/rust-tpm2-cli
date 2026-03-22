@@ -14,19 +14,15 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
 use crate::output;
-use crate::parse::{self, parse_hex_u32};
+use crate::parse::{self, parse_context_source};
 use crate::session::execute_with_optional_session;
 
 /// Sign a digest with a TPM key.
 #[derive(Parser)]
 pub struct SignCmd {
-    /// Signing key context file path
-    #[arg(short = 'c', long = "context", conflicts_with = "context_handle")]
-    pub context: Option<PathBuf>,
-
-    /// Signing key handle (hex, e.g. 0x81000001)
-    #[arg(short = 'H', long = "context-handle", value_parser = parse_hex_u32, conflicts_with = "context")]
-    pub context_handle: Option<u32>,
+    /// Signing key context (file:<path> or hex:<handle>)
+    #[arg(short = 'c', long = "context", value_parser = parse_context_source)]
+    pub context: ContextSource,
 
     /// Hash algorithm (sha1, sha256, sha384, sha512)
     #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
@@ -54,18 +50,10 @@ pub struct SignCmd {
 }
 
 impl SignCmd {
-    fn context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.context, self.context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!("exactly one of --context or --context-handle must be provided"),
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let key_handle = load_key_from_source(&mut ctx, &self.context_source()?)?;
+        let key_handle = load_key_from_source(&mut ctx, &self.context)?;
         let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
         let scheme = parse::parse_signature_scheme(&self.scheme, hash_alg)?;
 

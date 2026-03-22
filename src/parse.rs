@@ -6,6 +6,8 @@
 //! without touching a TPM context.  Functions that need a [`tss_esapi::Context`]
 //! live in [`crate::handle`] or [`crate::session`].
 
+use std::path::PathBuf;
+
 use anyhow::{Context, bail};
 use tss_esapi::attributes::NvIndexAttributesBuilder;
 use tss_esapi::handles::AuthHandle;
@@ -16,6 +18,7 @@ use tss_esapi::structures::{
 };
 
 use crate::error::Tpm2Error;
+use crate::handle::ContextSource;
 
 // ---------------------------------------------------------------------------
 // Hex
@@ -35,6 +38,39 @@ pub fn parse_hex_u32(s: &str) -> Result<u32, String> {
         .unwrap_or(s);
     u32::from_str_radix(digits, 16)
         .map_err(|_| format!("expected a hex value (e.g. 0x01400001), got: '{s}'"))
+}
+
+// ---------------------------------------------------------------------------
+// Context source
+// ---------------------------------------------------------------------------
+
+/// Parse a context source string into a [`ContextSource`].
+///
+/// Accepted formats:
+/// - `file:<path>` — a JSON context file path
+/// - `hex:<handle>` — a raw persistent TPM handle in hex (e.g. `hex:0x81010001`)
+///
+/// Intended for use as a clap `value_parser`:
+/// ```ignore
+/// #[arg(short = 'c', long, value_parser = parse_context_source)]
+/// pub context: ContextSource,
+/// ```
+pub fn parse_context_source(s: &str) -> Result<ContextSource, String> {
+    if let Some(path) = s.strip_prefix("file:") {
+        Ok(ContextSource::File(PathBuf::from(path)))
+    } else if let Some(hex_str) = s.strip_prefix("hex:") {
+        let digits = hex_str
+            .strip_prefix("0x")
+            .or_else(|| hex_str.strip_prefix("0X"))
+            .unwrap_or(hex_str);
+        let handle = u32::from_str_radix(digits, 16)
+            .map_err(|_| format!("invalid hex handle: '{hex_str}'"))?;
+        Ok(ContextSource::Handle(handle))
+    } else {
+        Err(format!(
+            "expected 'file:<path>' or 'hex:<handle>', got: '{s}'"
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +162,69 @@ pub fn provision_to_hierarchy_auth(provision: Provision) -> HierarchyAuth {
     match provision {
         Provision::Owner => HierarchyAuth::Owner,
         Provision::Platform => HierarchyAuth::Platform,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Raw ESYS_TR hierarchy (for raw FFI commands)
+// ---------------------------------------------------------------------------
+
+/// Parse a hierarchy specification into a raw `ESYS_TR` handle.
+///
+/// Accepted values: `o`/`owner`, `p`/`platform`, `e`/`endorsement`,
+/// `n`/`null`, `l`/`lockout`.
+///
+/// Intended for use as a clap `value_parser` in commands that call raw
+/// ESYS FFI functions.
+pub fn parse_esys_hierarchy(value: &str) -> Result<u32, Tpm2Error> {
+    use tss_esapi::tss2_esys::*;
+    match value.to_lowercase().as_str() {
+        "o" | "owner" => Ok(ESYS_TR_RH_OWNER),
+        "p" | "platform" => Ok(ESYS_TR_RH_PLATFORM),
+        "e" | "endorsement" => Ok(ESYS_TR_RH_ENDORSEMENT),
+        "n" | "null" => Ok(ESYS_TR_RH_NULL),
+        "l" | "lockout" => Ok(ESYS_TR_RH_LOCKOUT),
+        _ => Err(Tpm2Error::InvalidHandle(format!(
+            "unknown hierarchy: {value}"
+        ))),
+    }
+}
+
+/// Parse a hierarchy specification into a raw TPM2_RH handle constant.
+pub fn parse_tpm2_rh_hierarchy(value: &str) -> Result<u32, Tpm2Error> {
+    use tss_esapi::constants::tss::*;
+    match value.to_lowercase().as_str() {
+        "o" | "owner" => Ok(TPM2_RH_OWNER),
+        "p" | "platform" => Ok(TPM2_RH_PLATFORM),
+        "e" | "endorsement" => Ok(TPM2_RH_ENDORSEMENT),
+        "n" | "null" => Ok(TPM2_RH_NULL),
+        _ => Err(Tpm2Error::InvalidHandle(format!(
+            "unknown hierarchy: {value}"
+        ))),
+    }
+}
+
+/// NV authorization entity — either a hierarchy handle or "nv" (the index
+/// authorizes itself).
+#[derive(Debug, Clone, Copy)]
+pub enum NvAuthEntity {
+    /// Owner hierarchy
+    Owner,
+    /// Platform hierarchy
+    Platform,
+    /// The NV index itself is the auth entity
+    NvIndex,
+}
+
+/// Parse an NV authorization entity.
+///
+/// Accepted values: `o`/`owner`, `p`/`platform`, or anything else
+/// falls back to [`NvAuthEntity::NvIndex`].
+pub fn parse_nv_auth_entity(value: &str) -> Result<NvAuthEntity, String> {
+    match value.to_lowercase().as_str() {
+        "o" | "owner" => Ok(NvAuthEntity::Owner),
+        "p" | "platform" => Ok(NvAuthEntity::Platform),
+        _ => Ok(NvAuthEntity::NvIndex),
     }
 }
 
@@ -263,6 +362,26 @@ pub fn pcr_slot_to_index(slot: PcrSlot) -> u8 {
     val.trailing_zeros() as u8
 }
 
+fn parse_pcr_indices(s: &str) -> anyhow::Result<Vec<PcrSlot>> {
+    if s.eq_ignore_ascii_case("all") {
+        return Ok(all_pcr_slots());
+    }
+
+    s.split(',')
+        .map(|tok| {
+            let idx: u8 = tok
+                .trim()
+                .parse()
+                .with_context(|| format!("invalid PCR index: {tok}"))?;
+            index_to_pcr_slot(idx).ok_or_else(|| anyhow::anyhow!("PCR index out of range: {idx}"))
+        })
+        .collect()
+}
+
+fn all_pcr_slots() -> Vec<PcrSlot> {
+    (0u8..24).filter_map(index_to_pcr_slot).collect()
+}
+
 // ---------------------------------------------------------------------------
 // Symmetric mode
 // ---------------------------------------------------------------------------
@@ -284,15 +403,39 @@ pub fn parse_symmetric_mode(s: &str) -> anyhow::Result<SymmetricMode> {
 // Qualification data
 // ---------------------------------------------------------------------------
 
-/// Parse qualification data from an explicit hex string.
-pub fn parse_qualification_hex(s: &str) -> anyhow::Result<Vec<u8>> {
-    let stripped = s.strip_prefix("0x").unwrap_or(s);
-    hex::decode(stripped).map_err(|e| anyhow::anyhow!("invalid hex qualification data '{s}': {e}"))
+/// Parse qualification data from a CLI string.
+///
+/// Newtype wrapper around `Vec<u8>` so that clap does not interpret
+/// `Option<Vec<u8>>` as a multi-value collection.
+#[derive(Clone, Debug)]
+pub struct Qualification(pub Vec<u8>);
+
+impl Qualification {
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
 }
 
-/// Read qualification data from a file path.
-pub fn parse_qualification_file(path: &std::path::Path) -> anyhow::Result<Vec<u8>> {
-    std::fs::read(path).with_context(|| format!("reading qualification file: {}", path.display()))
+/// Accepted formats:
+/// - `hex:<hex_bytes>` — hex-encoded byte string (with optional 0x prefix)
+/// - `file:<path>`     — read raw bytes from file
+///
+/// Intended for use as a clap `value_parser`.
+pub fn parse_qualification(s: &str) -> Result<Qualification, String> {
+    if let Some(hex_str) = s.strip_prefix("hex:") {
+        let stripped = hex_str.strip_prefix("0x").unwrap_or(hex_str);
+        hex::decode(stripped)
+            .map(Qualification)
+            .map_err(|e| format!("invalid hex qualification data '{hex_str}': {e}"))
+    } else if let Some(path) = s.strip_prefix("file:") {
+        std::fs::read(std::path::Path::new(path))
+            .map(Qualification)
+            .map_err(|e| format!("reading qualification file '{path}': {e}"))
+    } else {
+        Err(format!(
+            "expected 'hex:<hex_bytes>' or 'file:<path>', got: '{s}'"
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -317,24 +460,4 @@ pub fn parse_tpm2_operation(s: &str) -> anyhow::Result<u16> {
         "bc" => Ok(TPM2_EO_BITCLEAR),
         _ => bail!("unknown operation: {s}; expected eq/neq/sgt/ugt/slt/ult/sge/uge/sle/ule/bs/bc"),
     }
-}
-
-fn parse_pcr_indices(s: &str) -> anyhow::Result<Vec<PcrSlot>> {
-    if s.eq_ignore_ascii_case("all") {
-        return Ok(all_pcr_slots());
-    }
-
-    s.split(',')
-        .map(|tok| {
-            let idx: u8 = tok
-                .trim()
-                .parse()
-                .with_context(|| format!("invalid PCR index: {tok}"))?;
-            index_to_pcr_slot(idx).ok_or_else(|| anyhow::anyhow!("PCR index out of range: {idx}"))
-        })
-        .collect()
-}
-
-fn all_pcr_slots() -> Vec<PcrSlot> {
-    (0u8..24).filter_map(index_to_pcr_slot).collect()
 }

@@ -12,8 +12,7 @@ use tss_esapi::interface_types::session_handles::AuthSession;
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_object_from_source};
-use crate::parse;
-use crate::parse::parse_hex_u32;
+use crate::parse::{self, parse_context_source};
 use crate::session::load_session_from_file;
 
 /// Couple a policy to the authorization of another object.
@@ -22,17 +21,13 @@ use crate::session::load_session_from_file;
 /// the authorization of the object specified by `-c`.
 #[derive(Parser)]
 pub struct PolicySecretCmd {
-    /// Object context file path
-    #[arg(short = 'c', long = "object-context", conflicts_with_all = ["object_context_handle", "object_context_hierarchy"])]
-    pub object_context: Option<PathBuf>,
-
-    /// Object handle (hex, e.g. 0x81000001)
-    #[arg(long = "object-context-handle", value_parser = parse_hex_u32, conflicts_with_all = ["object_context", "object_context_hierarchy"])]
-    pub object_context_handle: Option<u32>,
+    /// Object context (file:<path> or hex:<handle>)
+    #[arg(short = 'c', long = "object-context", value_parser = parse_context_source, conflicts_with = "object_context_hierarchy")]
+    pub object_context: Option<ContextSource>,
 
     /// Hierarchy shorthand (o/owner, e/endorsement, p/platform, l/lockout)
-    #[arg(long = "object-hierarchy", conflicts_with_all = ["object_context", "object_context_handle"])]
-    pub object_context_hierarchy: Option<String>,
+    #[arg(long = "object-hierarchy", value_parser = parse::parse_auth_handle, conflicts_with = "object_context")]
+    pub object_context_hierarchy: Option<AuthHandle>,
 
     /// Policy session file (from tpm2 startauthsession)
     #[arg(short = 'S', long = "session")]
@@ -48,16 +43,6 @@ pub struct PolicySecretCmd {
 }
 
 impl PolicySecretCmd {
-    fn object_context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.object_context, self.object_context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!(
-                "exactly one of --object-context or --object-context-handle must be provided"
-            ),
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
@@ -69,16 +54,13 @@ impl PolicySecretCmd {
 
         // Resolve the auth entity.  Accept hierarchy shorthands first,
         // then fall back to loading a generic object handle.
-        let auth_handle = match &self.object_context_hierarchy {
-            Some(h) => match h.to_lowercase().as_str() {
-                "o" | "owner" => AuthHandle::Owner,
-                "e" | "endorsement" => AuthHandle::Endorsement,
-                "p" | "platform" => AuthHandle::Platform,
-                "l" | "lockout" => AuthHandle::Lockout,
-                _ => anyhow::bail!("unknown hierarchy shorthand: {h}"),
-            },
+        let auth_handle = match self.object_context_hierarchy {
+            Some(ah) => ah,
             None => {
-                let obj = load_object_from_source(&mut ctx, &self.object_context_source()?)?;
+                let src = self.object_context.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!("--object-context or --object-hierarchy is required")
+                })?;
+                let obj = load_object_from_source(&mut ctx, src)?;
                 // Set the auth value on the object if provided.
                 if let Some(ref auth_str) = self.auth {
                     let auth = parse::parse_auth(auth_str)?;

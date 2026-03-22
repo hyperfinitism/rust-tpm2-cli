@@ -2,7 +2,6 @@
 
 use clap::Parser;
 use log::info;
-use tss_esapi::constants::tss::*;
 use tss_esapi::tss2_esys::*;
 
 use crate::cli::GlobalOpts;
@@ -15,12 +14,12 @@ use crate::raw_esys::RawEsysContext;
 #[derive(Parser)]
 pub struct HierarchyControlCmd {
     /// Auth hierarchy (p/platform or o/owner)
-    #[arg(short = 'C', long = "hierarchy")]
-    pub auth_hierarchy: String,
+    #[arg(short = 'C', long = "hierarchy", value_parser = parse::parse_esys_hierarchy)]
+    pub auth_hierarchy: u32,
 
     /// Hierarchy to enable/disable (o/owner, e/endorsement, p/platform, n/null)
-    #[arg()]
-    pub enable: String,
+    #[arg(value_parser = parse::parse_tpm2_rh_hierarchy)]
+    pub enable: u32,
 
     /// Auth value
     #[arg(short = 'P', long = "auth")]
@@ -34,20 +33,12 @@ pub struct HierarchyControlCmd {
 impl HierarchyControlCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
-        let auth_handle = RawEsysContext::resolve_hierarchy(&self.auth_hierarchy)?;
+        let auth_handle = self.auth_hierarchy;
 
         if let Some(ref auth_str) = self.auth {
             let auth = parse::parse_auth(auth_str)?;
             raw.set_auth(auth_handle, auth.value())?;
         }
-
-        let enable_hierarchy = match self.enable.to_lowercase().as_str() {
-            "o" | "owner" => TPM2_RH_OWNER,
-            "e" | "endorsement" => TPM2_RH_ENDORSEMENT,
-            "p" | "platform" => TPM2_RH_PLATFORM,
-            "n" | "null" => TPM2_RH_NULL,
-            _ => anyhow::bail!("unknown hierarchy: {}", self.enable),
-        };
 
         let state: TPMI_YES_NO = if self.state { 1 } else { 0 };
 
@@ -58,7 +49,7 @@ impl HierarchyControlCmd {
                 ESYS_TR_PASSWORD,
                 ESYS_TR_NONE,
                 ESYS_TR_NONE,
-                enable_hierarchy,
+                self.enable,
                 state,
             );
             if rc != 0 {

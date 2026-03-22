@@ -8,6 +8,8 @@ use log::info;
 use tss_esapi::structures::{Public, Sensitive};
 use tss_esapi::traits::UnMarshall;
 
+use tss_esapi::interface_types::resource_handles::Hierarchy;
+
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::parse;
@@ -28,8 +30,8 @@ pub struct LoadExternalCmd {
     pub private: Option<PathBuf>,
 
     /// Hierarchy (o/owner, p/platform, e/endorsement, n/null)
-    #[arg(short = 'a', long = "hierarchy", default_value = "n")]
-    pub hierarchy: String,
+    #[arg(short = 'a', long = "hierarchy", default_value = "n", value_parser = parse::parse_hierarchy)]
+    pub hierarchy: Hierarchy,
 
     /// Output file for the loaded key context
     #[arg(short = 'c', long = "key-context")]
@@ -43,7 +45,7 @@ pub struct LoadExternalCmd {
 impl LoadExternalCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
-        let hierarchy = parse::parse_hierarchy(&self.hierarchy)?;
+        let hierarchy = self.hierarchy;
 
         let pub_data = std::fs::read(&self.public)
             .with_context(|| format!("reading public from {}", self.public.display()))?;

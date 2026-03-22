@@ -11,8 +11,7 @@ use tss_esapi::traits::Marshall;
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source, load_object_from_source};
-use crate::parse;
-use crate::parse::parse_hex_u32;
+use crate::parse::{self, parse_context_source};
 use crate::session::load_session_from_file;
 use tss_esapi::constants::SessionType;
 use tss_esapi::interface_types::session_handles::AuthSession;
@@ -24,29 +23,13 @@ use tss_esapi::interface_types::session_handles::AuthSession;
 /// self-consistent.
 #[derive(Parser)]
 pub struct CertifyCmd {
-    /// Object to certify (context file path)
-    #[arg(
-        short = 'c',
-        long = "certifiedkey-context",
-        conflicts_with = "certified_context_handle"
-    )]
-    pub certified_context: Option<PathBuf>,
+    /// Object to certify (file:<path> or hex:<handle>)
+    #[arg(short = 'c', long = "certifiedkey-context", value_parser = parse_context_source)]
+    pub certified_context: ContextSource,
 
-    /// Object to certify (hex handle, e.g. 0x81000001)
-    #[arg(long = "certifiedkey-context-handle", value_parser = parse_hex_u32, conflicts_with = "certified_context")]
-    pub certified_context_handle: Option<u32>,
-
-    /// Signing key context file path
-    #[arg(
-        short = 'C',
-        long = "signingkey-context",
-        conflicts_with = "signing_context_handle"
-    )]
-    pub signing_context: Option<PathBuf>,
-
-    /// Signing key handle (hex, e.g. 0x81000001)
-    #[arg(long = "signingkey-context-handle", value_parser = parse_hex_u32, conflicts_with = "signing_context")]
-    pub signing_context_handle: Option<u32>,
+    /// Signing key context (file:<path> or hex:<handle>)
+    #[arg(short = 'C', long = "signingkey-context", value_parser = parse_context_source)]
+    pub signing_context: ContextSource,
 
     /// Auth value for the certified object
     #[arg(short = 'P', long = "certifiedkey-auth")]
@@ -64,17 +47,9 @@ pub struct CertifyCmd {
     #[arg(long = "scheme", default_value = "null")]
     pub scheme: String,
 
-    /// Qualifying data (hex string)
-    #[arg(
-        short = 'q',
-        long = "qualification",
-        conflicts_with = "qualification_file"
-    )]
-    pub qualification: Option<String>,
-
-    /// Qualifying data file path
-    #[arg(long = "qualification-file", conflicts_with = "qualification")]
-    pub qualification_file: Option<PathBuf>,
+    /// Qualifying data (hex:<hex_bytes> or file:<path>)
+    #[arg(short = 'q', long = "qualification", value_parser = parse::parse_qualification)]
+    pub qualification: Option<parse::Qualification>,
 
     /// Output file for the attestation data (marshaled TPMS_ATTEST)
     #[arg(short = 'o', long = "attestation")]
@@ -90,31 +65,11 @@ pub struct CertifyCmd {
 }
 
 impl CertifyCmd {
-    fn certified_context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.certified_context, self.certified_context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!(
-                "exactly one of --certifiedkey-context or --certifiedkey-context-handle must be provided"
-            ),
-        }
-    }
-
-    fn signing_context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.signing_context, self.signing_context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!(
-                "exactly one of --signingkey-context or --signingkey-context-handle must be provided"
-            ),
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let object_handle = load_object_from_source(&mut ctx, &self.certified_context_source()?)?;
-        let signing_key = load_key_from_source(&mut ctx, &self.signing_context_source()?)?;
+        let object_handle = load_object_from_source(&mut ctx, &self.certified_context)?;
+        let signing_key = load_key_from_source(&mut ctx, &self.signing_context)?;
         let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
         let scheme = parse::parse_signature_scheme(&self.scheme, hash_alg)?;
 
@@ -129,23 +84,16 @@ impl CertifyCmd {
                 .context("failed to set signing key auth")?;
         }
 
-        let qualifying = match (&self.qualification, &self.qualification_file) {
-            (Some(q), None) => {
-                let bytes =
-                    parse::parse_qualification_hex(q).context("failed to parse qualifying data")?;
-                Data::try_from(bytes).map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?
-            }
-            (None, Some(path)) => {
-                let bytes = parse::parse_qualification_file(path)
-                    .context("failed to read qualifying data file")?;
-                Data::try_from(bytes).map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?
-            }
-            (None, None) => Data::default(),
-            _ => {
-                anyhow::bail!("only one of --qualification or --qualification-file may be provided")
-            }
+        let qualifying = match &self.qualification {
+            Some(bytes) => Data::try_from(bytes.as_slice())
+                .map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?,
+            None => Data::default(),
         };
 
+        // TPM2_Certify requires two auth sessions: one for the certified
+        // object (authSession1) and one for the signing key (authSession2).
+        // If -S is provided, use it for the certified object; otherwise
+        // fall back to password auth.  The signing key always uses password.
         let session1 = match &self.session {
             Some(path) => load_session_from_file(&mut ctx, path, SessionType::Hmac)?,
             None => AuthSession::Password,

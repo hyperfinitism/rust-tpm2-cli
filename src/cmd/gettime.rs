@@ -5,17 +5,16 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
+use tss_esapi::constants::SessionType;
+use tss_esapi::interface_types::session_handles::AuthSession;
 use tss_esapi::structures::Data;
 use tss_esapi::traits::Marshall;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
-use crate::parse;
-use crate::parse::parse_hex_u32;
+use crate::parse::{self, parse_context_source};
 use crate::session::load_session_from_file;
-use tss_esapi::constants::SessionType;
-use tss_esapi::interface_types::session_handles::AuthSession;
 
 /// Get a signed timestamp from the TPM.
 ///
@@ -23,13 +22,9 @@ use tss_esapi::interface_types::session_handles::AuthSession;
 /// the current time and clock values, signed by the specified key.
 #[derive(Parser)]
 pub struct GetTimeCmd {
-    /// Signing key context file path
-    #[arg(short = 'c', long = "context", conflicts_with = "context_handle")]
-    pub context: Option<PathBuf>,
-
-    /// Signing key handle (hex, e.g. 0x81000001)
-    #[arg(short = 'H', long = "context-handle", value_parser = parse_hex_u32, conflicts_with = "context")]
-    pub context_handle: Option<u32>,
+    /// Signing key context (file:<path> or hex:<handle>)
+    #[arg(short = 'c', long = "context", value_parser = parse_context_source)]
+    pub context: ContextSource,
 
     /// Auth value for the signing key
     #[arg(short = 'p', long = "auth")]
@@ -43,17 +38,9 @@ pub struct GetTimeCmd {
     #[arg(long = "scheme", default_value = "null")]
     pub scheme: String,
 
-    /// Qualifying data (hex string)
-    #[arg(
-        short = 'q',
-        long = "qualification",
-        conflicts_with = "qualification_file"
-    )]
-    pub qualification: Option<String>,
-
-    /// Qualifying data file path
-    #[arg(long = "qualification-file", conflicts_with = "qualification")]
-    pub qualification_file: Option<PathBuf>,
+    /// Qualifying data (hex:<hex_bytes> or file:<path>)
+    #[arg(short = 'q', long = "qualification", value_parser = parse::parse_qualification)]
+    pub qualification: Option<parse::Qualification>,
 
     /// Output file for the attestation data
     #[arg(short = 'o', long = "attestation")]
@@ -69,18 +56,10 @@ pub struct GetTimeCmd {
 }
 
 impl GetTimeCmd {
-    fn context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.context, self.context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!("exactly one of --context or --context-handle must be provided"),
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let signing_key = load_key_from_source(&mut ctx, &self.context_source()?)?;
+        let signing_key = load_key_from_source(&mut ctx, &self.context)?;
         let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
         let scheme = parse::parse_signature_scheme(&self.scheme, hash_alg)?;
 
@@ -90,25 +69,23 @@ impl GetTimeCmd {
                 .context("tr_set_auth failed")?;
         }
 
-        let qualifying = match (&self.qualification, &self.qualification_file) {
-            (Some(q), None) => {
-                let bytes = parse::parse_qualification_hex(q)?;
-                Data::try_from(bytes).map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?
-            }
-            (None, Some(path)) => {
-                let bytes = parse::parse_qualification_file(path)?;
-                Data::try_from(bytes).map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?
-            }
-            _ => Data::default(),
+        let qualifying_data = match &self.qualification {
+            Some(bytes) => Data::try_from(bytes.as_slice())
+                .map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?,
+            None => Data::default(),
         };
 
+        // TPM2_GetTime requires two auth sessions: one for the privacy admin
+        // (authSession1) and one for the signing key (authSession2).
+        // If -S is provided, use it for the privacy admin; otherwise fall
+        // back to password auth.  The signing key always uses password.
         let session1 = match &self.session {
             Some(path) => load_session_from_file(&mut ctx, path, SessionType::Hmac)?,
             None => AuthSession::Password,
         };
         ctx.set_sessions((Some(session1), Some(AuthSession::Password), None));
         let result = ctx
-            .get_time(signing_key, qualifying.clone(), scheme)
+            .get_time(signing_key, qualifying_data.clone(), scheme)
             .map_err(|e| anyhow::anyhow!(e));
         ctx.clear_sessions();
         let (attest, signature) = result.context("TPM2_GetTime failed")?;

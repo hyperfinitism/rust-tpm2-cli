@@ -14,6 +14,8 @@ use tss_esapi::structures::{
     PublicRsaParametersBuilder, RsaExponent, RsaScheme, SymmetricDefinitionObject,
 };
 
+use tss_esapi::interface_types::resource_handles::Hierarchy;
+
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::parse;
@@ -23,8 +25,8 @@ use crate::session::execute_with_optional_session;
 #[derive(Parser)]
 pub struct CreatePrimaryCmd {
     /// Hierarchy (o/owner, p/platform, e/endorsement, n/null)
-    #[arg(short = 'C', long = "hierarchy", default_value = "o")]
-    pub hierarchy: String,
+    #[arg(short = 'C', long = "hierarchy", default_value = "o", value_parser = parse::parse_hierarchy)]
+    pub hierarchy: Hierarchy,
 
     /// Key algorithm (rsa, ecc)
     #[arg(short = 'G', long = "key-algorithm", default_value = "rsa")]
@@ -55,7 +57,6 @@ impl CreatePrimaryCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let hierarchy = parse::parse_hierarchy(&self.hierarchy)?;
         let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
         let public = build_public(&self.algorithm, hash_alg, self.key_size)?;
 
@@ -66,7 +67,14 @@ impl CreatePrimaryCmd {
 
         let session_path = self.session.as_deref();
         let result = execute_with_optional_session(&mut ctx, session_path, |ctx| {
-            ctx.create_primary(hierarchy, public.clone(), auth.clone(), None, None, None)
+            ctx.create_primary(
+                self.hierarchy,
+                public.clone(),
+                auth.clone(),
+                None,
+                None,
+                None,
+            )
         })
         .context("TPM2_CreatePrimary failed")?;
 

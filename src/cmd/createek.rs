@@ -6,12 +6,11 @@ use anyhow::{Context, bail};
 use clap::Parser;
 use log::info;
 use tss_esapi::attributes::ObjectAttributesBuilder;
-use tss_esapi::handles::{ObjectHandle, PersistentTpmHandle};
+use tss_esapi::handles::ObjectHandle;
 use tss_esapi::interface_types::algorithm::{HashingAlgorithm, PublicAlgorithm};
-use tss_esapi::interface_types::dynamic_handles::Persistent;
 use tss_esapi::interface_types::ecc::EccCurve;
 use tss_esapi::interface_types::key_bits::RsaKeyBits;
-use tss_esapi::interface_types::resource_handles::{Hierarchy, HierarchyAuth, Provision};
+use tss_esapi::interface_types::resource_handles::{Hierarchy, HierarchyAuth};
 use tss_esapi::structures::{
     Digest, EccScheme, KeyDerivationFunctionScheme, Public, PublicBuilder,
     PublicEccParametersBuilder, PublicRsaParametersBuilder, RsaExponent, RsaScheme,
@@ -52,9 +51,9 @@ pub struct CreateEkCmd {
     #[arg(short = 'w', long = "owner-auth")]
     pub owner_auth: Option<String>,
 
-    /// Output context file path, or persistent handle (e.g. 0x81010001)
-    #[arg(short = 'c', long = "ek-context")]
-    pub ek_context: Option<String>,
+    /// Output context file path
+    #[arg(short = 'c', long = "ek-context", required = true)]
+    pub ek_context: PathBuf,
 
     /// Output file for the public portion (TPM2B_PUBLIC, marshaled binary)
     #[arg(short = 'u', long = "public")]
@@ -105,57 +104,17 @@ impl CreateEkCmd {
             info!("public key saved to {}", path.display());
         }
 
-        // Save context or persist to a permanent handle.
-        if let Some(ref ek_ctx) = self.ek_context {
-            if let Some(raw) = try_parse_persistent_handle(ek_ctx) {
-                self.persist_ek(&mut ctx, result.key_handle.into(), raw)?;
-            } else {
-                let saved = ctx
-                    .context_save(result.key_handle.into())
-                    .context("context_save failed")?;
-                let json = serde_json::to_string(&saved)?;
-                std::fs::write(ek_ctx, json)
-                    .with_context(|| format!("writing context to {ek_ctx}"))?;
-                info!("context saved to {ek_ctx}");
-            }
-        }
+        // Save EK context.
+        let saved = ctx
+            .context_save(result.key_handle.into())
+            .context("context_save failed")?;
+        let json = serde_json::to_string(&saved)?;
+        std::fs::write(&self.ek_context, json)
+            .with_context(|| format!("writing EK context to {}", self.ek_context.display()))?;
+        info!("EK context saved to {}", self.ek_context.display());
 
         Ok(())
     }
-
-    fn persist_ek(
-        &self,
-        ctx: &mut tss_esapi::Context,
-        obj_handle: ObjectHandle,
-        raw_handle: u32,
-    ) -> anyhow::Result<()> {
-        let persistent_tpm_handle = PersistentTpmHandle::new(raw_handle)
-            .map_err(|e| anyhow::anyhow!("invalid persistent handle: {e}"))?;
-        let persistent: Persistent = persistent_tpm_handle.into();
-
-        // Set owner hierarchy auth if provided (evict_control uses owner auth).
-        if let Some(ref a) = self.owner_auth {
-            let auth = parse::parse_auth(a)?;
-            let hier_obj: ObjectHandle = HierarchyAuth::Owner.into();
-            ctx.tr_set_auth(hier_obj, auth)
-                .context("failed to set owner hierarchy auth")?;
-        }
-
-        ctx.execute_with_nullauth_session(|ctx| -> tss_esapi::Result<_> {
-            ctx.evict_control(Provision::Owner, obj_handle, persistent)
-        })
-        .context("TPM2_EvictControl failed")?;
-
-        info!("EK persisted at 0x{:08x}", raw_handle);
-        Ok(())
-    }
-}
-
-/// Try to parse a string as a hex persistent handle (0x-prefixed).
-/// Returns `None` if the string does not look like a hex handle.
-fn try_parse_persistent_handle(s: &str) -> Option<u32> {
-    let stripped = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))?;
-    u32::from_str_radix(stripped, 16).ok()
 }
 
 fn build_ek_public(alg: &str) -> anyhow::Result<Public> {

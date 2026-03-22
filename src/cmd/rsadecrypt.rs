@@ -11,8 +11,7 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
 use crate::output;
-use crate::parse;
-use crate::parse::parse_hex_u32;
+use crate::parse::{self, parse_context_source};
 use crate::session::execute_with_optional_session;
 
 /// Perform RSA decryption using a TPM-loaded key.
@@ -20,17 +19,9 @@ use crate::session::execute_with_optional_session;
 /// Wraps TPM2_RSA_Decrypt.
 #[derive(Parser)]
 pub struct RsaDecryptCmd {
-    /// RSA key context file path
-    #[arg(
-        short = 'c',
-        long = "key-context",
-        conflicts_with = "key_context_handle"
-    )]
-    pub key_context: Option<PathBuf>,
-
-    /// RSA key handle (hex, e.g. 0x81000001)
-    #[arg(short = 'H', long = "key-context-handle", value_parser = parse_hex_u32, conflicts_with = "key_context")]
-    pub key_context_handle: Option<u32>,
+    /// RSA key context (file:<path> or hex:<handle>)
+    #[arg(short = 'c', long = "key-context", value_parser = parse_context_source)]
+    pub key_context: ContextSource,
 
     /// Auth value for the key
     #[arg(short = 'p', long = "auth")]
@@ -62,19 +53,9 @@ pub struct RsaDecryptCmd {
 }
 
 impl RsaDecryptCmd {
-    fn key_context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.key_context, self.key_context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!(
-                "exactly one of --key-context or --key-context-handle must be provided"
-            ),
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
-        let key_handle = load_key_from_source(&mut ctx, &self.key_context_source()?)?;
+        let key_handle = load_key_from_source(&mut ctx, &self.key_context)?;
 
         let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
         let scheme = parse_rsa_scheme(&self.scheme, hash_alg)?;

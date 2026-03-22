@@ -6,6 +6,8 @@ use anyhow::Context;
 use clap::Parser;
 use log::info;
 
+use tss_esapi::handles::AuthHandle;
+
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::parse;
@@ -18,8 +20,8 @@ use crate::session::execute_with_optional_session;
 #[derive(Parser)]
 pub struct ClearCmd {
     /// Authorization handle (o/owner, p/platform, l/lockout)
-    #[arg(short = 'c', long = "auth", default_value = "l")]
-    pub auth_handle: String,
+    #[arg(short = 'c', long = "auth", default_value = "l", value_parser = parse::parse_auth_handle)]
+    pub auth_handle: AuthHandle,
 
     /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
@@ -30,11 +32,9 @@ impl ClearCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let auth = parse::parse_auth_handle(&self.auth_handle)?;
-
         let session_path = self.session.as_deref();
         execute_with_optional_session(&mut ctx, session_path, |ctx| {
-            ctx.clear(auth)?;
+            ctx.clear(self.auth_handle)?;
             Ok(())
         })
         .context("TPM2_Clear failed")?;

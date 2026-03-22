@@ -19,24 +19,15 @@ use tss_esapi::traits::Marshall;
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
-use crate::parse;
-use crate::parse::parse_hex_u32;
+use crate::parse::{self, parse_context_source};
 use crate::session::execute_with_optional_session;
 
 /// Create a child key under a parent key.
 #[derive(Parser)]
 pub struct CreateCmd {
-    /// Parent key context file path
-    #[arg(
-        short = 'C',
-        long = "parent-context",
-        conflicts_with = "parent_context_handle"
-    )]
-    pub parent_context: Option<PathBuf>,
-
-    /// Parent key handle (hex, e.g. 0x81000001)
-    #[arg(short = 'H', long = "parent-context-handle", value_parser = parse_hex_u32, conflicts_with = "parent_context")]
-    pub parent_context_handle: Option<u32>,
+    /// Parent key context (file:<path> or hex:<handle>)
+    #[arg(short = 'C', long = "parent-context", value_parser = parse_context_source)]
+    pub parent_context: ContextSource,
 
     /// Key algorithm (rsa, ecc, keyedhash, hmac)
     #[arg(short = 'G', long = "key-algorithm", default_value = "rsa")]
@@ -72,20 +63,10 @@ pub struct CreateCmd {
 }
 
 impl CreateCmd {
-    fn parent_context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.parent_context, self.parent_context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!(
-                "exactly one of --parent-context or --parent-context-handle must be provided"
-            ),
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let parent_handle = load_key_from_source(&mut ctx, &self.parent_context_source()?)?;
+        let parent_handle = load_key_from_source(&mut ctx, &self.parent_context)?;
         let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
         let public = build_child_public(&self.algorithm, hash_alg, self.key_size)?;
 

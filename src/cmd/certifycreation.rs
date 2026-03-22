@@ -6,11 +6,12 @@ use anyhow::Context;
 use clap::Parser;
 use log::info;
 use tss_esapi::constants::tss::*;
+use tss_esapi::structures::Data;
 use tss_esapi::tss2_esys::*;
 
 use crate::cli::GlobalOpts;
 use crate::handle::ContextSource;
-use crate::parse::{self, parse_hex_u32};
+use crate::parse::{self, parse_context_source};
 use crate::raw_esys::{self, RawEsysContext};
 
 /// Certify the creation data associated with an object.
@@ -18,29 +19,13 @@ use crate::raw_esys::{self, RawEsysContext};
 /// Wraps TPM2_CertifyCreation (raw FFI).
 #[derive(Parser)]
 pub struct CertifyCreationCmd {
-    /// Signing key context file path
-    #[arg(
-        short = 'C',
-        long = "signingkey-context",
-        conflicts_with = "signing_context_handle"
-    )]
-    pub signing_context: Option<PathBuf>,
+    /// Signing key context (file:<path> or hex:<handle>)
+    #[arg(short = 'C', long = "signingkey-context", value_parser = parse_context_source)]
+    pub signing_context: ContextSource,
 
-    /// Signing key handle (hex, e.g. 0x81000001)
-    #[arg(long = "signingkey-context-handle", value_parser = parse_hex_u32, conflicts_with = "signing_context")]
-    pub signing_context_handle: Option<u32>,
-
-    /// Object context file path
-    #[arg(
-        short = 'c',
-        long = "certifiedkey-context",
-        conflicts_with = "certified_context_handle"
-    )]
-    pub certified_context: Option<PathBuf>,
-
-    /// Object handle (hex, e.g. 0x81000001)
-    #[arg(long = "certifiedkey-context-handle", value_parser = parse_hex_u32, conflicts_with = "certified_context")]
-    pub certified_context_handle: Option<u32>,
+    /// Object context (file:<path> or hex:<handle>)
+    #[arg(short = 'c', long = "certifiedkey-context", value_parser = parse_context_source)]
+    pub certified_context: ContextSource,
 
     /// Auth value for the signing key
     #[arg(short = 'P', long = "signingkey-auth")]
@@ -54,17 +39,9 @@ pub struct CertifyCreationCmd {
     #[arg(short = 't', long = "ticket")]
     pub ticket: PathBuf,
 
-    /// Qualifying data (hex string)
-    #[arg(
-        short = 'q',
-        long = "qualification",
-        conflicts_with = "qualification_file"
-    )]
-    pub qualification: Option<String>,
-
-    /// Qualifying data file path
-    #[arg(long = "qualification-file", conflicts_with = "qualification")]
-    pub qualification_file: Option<PathBuf>,
+    /// Qualifying data (hex:<hex_bytes> or file:<path>)
+    #[arg(short = 'q', long = "qualification", value_parser = parse::parse_qualification)]
+    pub qualification: Option<parse::Qualification>,
 
     /// Signature scheme (null)
     #[arg(short = 'g', long = "scheme", default_value = "null")]
@@ -80,31 +57,11 @@ pub struct CertifyCreationCmd {
 }
 
 impl CertifyCreationCmd {
-    fn signing_context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.signing_context, self.signing_context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!(
-                "exactly one of --signingkey-context or --signingkey-context-handle must be provided"
-            ),
-        }
-    }
-
-    fn certified_context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.certified_context, self.certified_context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!(
-                "exactly one of --certifiedkey-context or --certifiedkey-context-handle must be provided"
-            ),
-        }
-    }
-
     #[allow(clippy::field_reassign_with_default)]
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
-        let sign_handle = raw.resolve_handle_from_source(&self.signing_context_source()?)?;
-        let obj_handle = raw.resolve_handle_from_source(&self.certified_context_source()?)?;
+        let sign_handle = raw.resolve_handle_from_source(&self.signing_context)?;
+        let obj_handle = raw.resolve_handle_from_source(&self.certified_context)?;
 
         if let Some(ref auth_str) = self.signing_auth {
             let auth = parse::parse_auth(auth_str)?;
@@ -147,24 +104,11 @@ impl CertifyCreationCmd {
             TPMT_TK_CREATION::default()
         };
 
-        let qualifying = match (&self.qualification, &self.qualification_file) {
-            (Some(q), None) => {
-                let bytes = parse::parse_qualification_hex(q)?;
-                let mut qd = TPM2B_DATA::default();
-                let len = bytes.len().min(qd.buffer.len());
-                qd.size = len as u16;
-                qd.buffer[..len].copy_from_slice(&bytes[..len]);
-                qd
-            }
-            (None, Some(path)) => {
-                let bytes = parse::parse_qualification_file(path)?;
-                let mut qd = TPM2B_DATA::default();
-                let len = bytes.len().min(qd.buffer.len());
-                qd.size = len as u16;
-                qd.buffer[..len].copy_from_slice(&bytes[..len]);
-                qd
-            }
-            _ => TPM2B_DATA::default(),
+        let qualifying_data: TPM2B_DATA = match &self.qualification {
+            Some(bytes) => Data::try_from(bytes.as_slice())
+                .map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?
+                .into(),
+            None => TPM2B_DATA::default(),
         };
 
         let in_scheme = TPMT_SIG_SCHEME {
@@ -183,7 +127,7 @@ impl CertifyCreationCmd {
                 ESYS_TR_PASSWORD,
                 ESYS_TR_NONE,
                 ESYS_TR_NONE,
-                &qualifying,
+                &qualifying_data,
                 &creation_hash,
                 &in_scheme,
                 &creation_ticket,

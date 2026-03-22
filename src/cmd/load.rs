@@ -10,7 +10,7 @@ use tss_esapi::structures::{Private, PublicBuffer};
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
-use crate::parse::parse_hex_u32;
+use crate::parse::parse_context_source;
 use crate::session::execute_with_optional_session;
 
 /// Load a key (private + public) into the TPM under a parent.
@@ -19,17 +19,9 @@ use crate::session::execute_with_optional_session;
 /// as produced by `tpm2 create`.
 #[derive(Parser)]
 pub struct LoadCmd {
-    /// Parent key context file path
-    #[arg(
-        short = 'C',
-        long = "parent-context",
-        conflicts_with = "parent_context_handle"
-    )]
-    pub parent_context: Option<PathBuf>,
-
-    /// Parent key handle (hex, e.g. 0x81000001)
-    #[arg(short = 'H', long = "parent-context-handle", value_parser = parse_hex_u32, conflicts_with = "parent_context")]
-    pub parent_context_handle: Option<u32>,
+    /// Parent key context (file:<path> or hex:<handle>)
+    #[arg(short = 'C', long = "parent-context", value_parser = parse_context_source)]
+    pub parent_context: ContextSource,
 
     /// Private key file (raw binary)
     #[arg(short = 'r', long = "private")]
@@ -49,20 +41,10 @@ pub struct LoadCmd {
 }
 
 impl LoadCmd {
-    fn parent_context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.parent_context, self.parent_context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!(
-                "exactly one of --parent-context or --parent-context-handle must be provided"
-            ),
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let parent_handle = load_key_from_source(&mut ctx, &self.parent_context_source()?)?;
+        let parent_handle = load_key_from_source(&mut ctx, &self.parent_context)?;
 
         let priv_bytes = std::fs::read(&self.private)
             .with_context(|| format!("reading private file: {}", self.private.display()))?;

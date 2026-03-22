@@ -2,15 +2,15 @@
 
 use std::path::PathBuf;
 
-use anyhow::Context;
 use clap::Parser;
 use log::info;
 use tss_esapi::constants::tss::*;
+use tss_esapi::structures::Data;
 use tss_esapi::tss2_esys::*;
 
 use crate::cli::GlobalOpts;
 use crate::handle::ContextSource;
-use crate::parse::{self, parse_hex_u32};
+use crate::parse::{self, NvAuthEntity, parse_context_source};
 use crate::raw_esys::{self, RawEsysContext};
 
 /// Certify the contents of an NV index.
@@ -18,25 +18,17 @@ use crate::raw_esys::{self, RawEsysContext};
 /// Wraps TPM2_NV_Certify (raw FFI).
 #[derive(Parser)]
 pub struct NvCertifyCmd {
-    /// Signing key context file path
-    #[arg(
-        short = 'C',
-        long = "signing-key-context",
-        conflicts_with = "signing_key_context_handle"
-    )]
-    pub signing_key_context: Option<PathBuf>,
-
-    /// Signing key handle (hex, e.g. 0x81000001)
-    #[arg(long = "signing-key-context-handle", value_parser = parse_hex_u32, conflicts_with = "signing_key_context")]
-    pub signing_key_context_handle: Option<u32>,
+    /// Signing key context (file:<path> or hex:<handle>)
+    #[arg(short = 'C', long = "signing-key-context", value_parser = parse_context_source)]
+    pub signing_key_context: ContextSource,
 
     /// NV index to certify (hex, e.g. 0x01000001)
     #[arg(short = 'i', long = "nv-index")]
     pub nv_index: String,
 
-    /// Auth hierarchy for the NV index (o/p/e)
-    #[arg(short = 'c', long = "nv-auth-hierarchy", default_value = "o")]
-    pub nv_auth_hierarchy: String,
+    /// Auth hierarchy for the NV index (o/p/e or nv)
+    #[arg(short = 'c', long = "nv-auth-hierarchy", default_value = "o", value_parser = parse::parse_nv_auth_entity)]
+    pub nv_auth_hierarchy: NvAuthEntity,
 
     /// Auth value for the signing key
     #[arg(short = 'P', long = "signing-key-auth")]
@@ -66,33 +58,19 @@ pub struct NvCertifyCmd {
     #[arg(long = "signature")]
     pub signature: Option<PathBuf>,
 
-    /// Qualifying data (nonce)
-    #[arg(short = 'q', long = "qualification")]
-    pub qualification: Option<String>,
+    /// Qualifying data (hex:<hex_bytes> or file:<path>)
+    #[arg(short = 'q', long = "qualification", value_parser = crate::parse::parse_qualification)]
+    pub qualification: Option<crate::parse::Qualification>,
 }
 
 impl NvCertifyCmd {
-    fn signing_key_context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.signing_key_context, self.signing_key_context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!(
-                "exactly one of --signing-key-context or --signing-key-context-handle must be provided"
-            ),
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
-        let sign_handle = raw.resolve_handle_from_source(&self.signing_key_context_source()?)?;
+        let sign_handle = raw.resolve_handle_from_source(&self.signing_key_context)?;
 
         let nv_handle = raw.resolve_nv_index(&self.nv_index)?;
 
-        let auth_handle = if self.nv_auth_hierarchy == "nv" {
-            nv_handle
-        } else {
-            RawEsysContext::resolve_hierarchy(&self.nv_auth_hierarchy)?
-        };
+        let auth_handle = RawEsysContext::resolve_nv_auth_entity(self.nv_auth_hierarchy, nv_handle);
 
         if let Some(ref auth_str) = self.signing_key_auth {
             let auth = parse::parse_auth(auth_str)?;
@@ -103,12 +81,12 @@ impl NvCertifyCmd {
             raw.set_auth(auth_handle, auth.value())?;
         }
 
-        let mut qualifying_data = TPM2B_DATA::default();
-        if let Some(ref q) = self.qualification {
-            let bytes = hex::decode(q).context("invalid qualifying data hex")?;
-            qualifying_data.size = bytes.len() as u16;
-            qualifying_data.buffer[..bytes.len()].copy_from_slice(&bytes);
-        }
+        let qualifying_data: TPM2B_DATA = match &self.qualification {
+            Some(bytes) => Data::try_from(bytes.as_slice())
+                .map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?
+                .into(),
+            None => TPM2B_DATA::default(),
+        };
 
         let scheme = TPMT_SIG_SCHEME {
             scheme: TPM2_ALG_NULL,

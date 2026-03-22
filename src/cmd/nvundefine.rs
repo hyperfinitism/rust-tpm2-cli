@@ -7,6 +7,8 @@ use clap::Parser;
 use log::info;
 use tss_esapi::handles::{NvIndexTpmHandle, ObjectHandle, TpmHandle};
 
+use tss_esapi::interface_types::resource_handles::Provision;
+
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::parse::{self, parse_hex_u32};
@@ -23,8 +25,8 @@ pub struct NvUndefineCmd {
     pub nv_index: u32,
 
     /// Authorization hierarchy (o/owner, p/platform)
-    #[arg(short = 'C', long = "hierarchy", default_value = "o")]
-    pub hierarchy: String,
+    #[arg(short = 'C', long = "hierarchy", default_value = "o", value_parser = parse::parse_provision)]
+    pub hierarchy: Provision,
 
     /// Authorization value for the hierarchy
     #[arg(short = 'P', long = "auth")]
@@ -39,13 +41,12 @@ impl NvUndefineCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let provision = parse::parse_provision(&self.hierarchy)?;
         let nv_tpm_handle = NvIndexTpmHandle::new(self.nv_index)
             .map_err(|e| anyhow::anyhow!("invalid NV index handle: {e}"))?;
 
         if let Some(ref auth_str) = self.auth {
             let auth_value = parse::parse_auth(auth_str)?;
-            let hier_obj: ObjectHandle = parse::provision_to_hierarchy_auth(provision).into();
+            let hier_obj: ObjectHandle = parse::provision_to_hierarchy_auth(self.hierarchy).into();
             ctx.tr_set_auth(hier_obj, auth_value)
                 .context("failed to set hierarchy auth")?;
         }
@@ -57,7 +58,7 @@ impl NvUndefineCmd {
 
         let session_path = self.session.as_deref();
         execute_with_optional_session(&mut ctx, session_path, |ctx| {
-            ctx.nv_undefine_space(provision, nv_index_handle.into())
+            ctx.nv_undefine_space(self.hierarchy, nv_index_handle.into())
         })
         .context("TPM2_NV_UndefineSpace failed")?;
 

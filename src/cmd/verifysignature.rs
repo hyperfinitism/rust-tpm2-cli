@@ -13,31 +13,27 @@ use tss_esapi::tss2_esys::TPMT_TK_VERIFIED;
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
-use crate::parse::{self, parse_hex_u32};
+use crate::parse::{self, parse_context_source};
 
 /// Verify a signature using a TPM-loaded key or an external public key file.
 ///
 /// The signature file should contain a raw TPM marshaled TPMT_SIGNATURE.
-/// The verification key can be specified as a context file (`-c`), a
-/// persistent handle (`-H`), or an external public key file (`-k`) in
+/// The verification key can be specified as a context source (`-c file:<path>`
+/// or `-c hex:<handle>`), or an external public key file (`-k`) in
 /// marshaled TPM2B_PUBLIC format.
 #[derive(Parser)]
 pub struct VerifySignatureCmd {
-    /// Key context file path
-    #[arg(short = 'c', long = "context", conflicts_with_all = ["context_handle", "key_file"])]
-    pub context: Option<PathBuf>,
-
-    /// Key handle (hex, e.g. 0x81000001)
-    #[arg(short = 'H', long = "context-handle", value_parser = parse_hex_u32, conflicts_with_all = ["context", "key_file"])]
-    pub context_handle: Option<u32>,
+    /// Key context (file:<path> or hex:<handle>)
+    #[arg(short = 'c', long = "context", value_parser = parse_context_source, conflicts_with = "key_file")]
+    pub context: Option<ContextSource>,
 
     /// External public key file (marshaled TPM2B_PUBLIC binary)
-    #[arg(short = 'k', long = "key-file", conflicts_with_all = ["context", "context_handle"])]
+    #[arg(short = 'k', long = "key-file", conflicts_with = "context")]
     pub key_file: Option<PathBuf>,
 
     /// Hierarchy for the ticket (owner, endorsement, platform, null)
-    #[arg(short = 'C', long = "hierarchy", default_value = "owner")]
-    pub hierarchy: String,
+    #[arg(short = 'C', long = "hierarchy", default_value = "owner", value_parser = parse::parse_hierarchy)]
+    pub hierarchy: Hierarchy,
 
     /// Hash algorithm (sha1, sha256, sha384, sha512)
     #[arg(
@@ -76,22 +72,15 @@ impl VerifySignatureCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let hierarchy =
-            parse::parse_hierarchy(&self.hierarchy).with_context(|| "failed to parse hierarchy")?;
-
-        // Resolve the verification key: context file, hex handle, or external key file.
+        // Resolve the verification key: context source or external key file.
         let (key_handle, flush_after) = if let Some(ref key_path) = self.key_file {
-            let handle = load_external_public_key(&mut ctx, key_path, hierarchy)?;
+            let handle = load_external_public_key(&mut ctx, key_path, self.hierarchy)?;
             (handle, true)
         } else {
-            let src = match (&self.context, self.context_handle) {
-                (Some(path), None) => ContextSource::File(path.clone()),
-                (None, Some(handle)) => ContextSource::Handle(handle),
-                _ => anyhow::bail!(
-                    "exactly one of --context, --context-handle, or --key-file must be provided"
-                ),
-            };
-            let handle = load_key_from_source(&mut ctx, &src)?;
+            let src = self.context.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("exactly one of --context or --key-file must be provided")
+            })?;
+            let handle = load_key_from_source(&mut ctx, src)?;
             (handle, false)
         };
 
@@ -108,7 +97,7 @@ impl VerifySignatureCmd {
             let buffer = MaxBuffer::try_from(message_bytes)
                 .map_err(|e| anyhow::anyhow!("input too large: {e}"))?;
             let (digest, _ticket) = ctx
-                .execute_without_session(|ctx| ctx.hash(buffer.clone(), alg, hierarchy))
+                .execute_without_session(|ctx| ctx.hash(buffer.clone(), alg, self.hierarchy))
                 .context("TPM2_Hash failed")?;
             digest.value().to_vec()
         };

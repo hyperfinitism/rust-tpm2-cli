@@ -22,8 +22,7 @@ use tss_esapi::traits::Marshall;
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
-use crate::parse;
-use crate::parse::parse_hex_u32;
+use crate::parse::{self, parse_context_source};
 use crate::session::{flush_policy_session, start_ek_policy_session};
 
 /// Create an attestation key (AK) under an endorsement key.
@@ -33,13 +32,9 @@ use crate::session::{flush_policy_session, start_ek_policy_session};
 /// for remote attestation flows.
 #[derive(Parser)]
 pub struct CreateAkCmd {
-    /// EK context file path
-    #[arg(short = 'C', long = "ek-context", conflicts_with = "ek_context_handle")]
-    pub ek_context: Option<PathBuf>,
-
-    /// EK handle (hex, e.g. 0x81000001)
-    #[arg(short = 'H', long = "ek-context-handle", value_parser = parse_hex_u32, conflicts_with = "ek_context")]
-    pub ek_context_handle: Option<u32>,
+    /// EK context (file:<path> or hex:<handle>)
+    #[arg(short = 'C', long = "ek-context", value_parser = parse_context_source)]
+    pub ek_context: ContextSource,
 
     /// Output context file for the attestation key
     #[arg(short = 'c', long = "ak-context")]
@@ -75,23 +70,13 @@ pub struct CreateAkCmd {
 }
 
 impl CreateAkCmd {
-    fn ek_context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.ek_context, self.ek_context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => {
-                anyhow::bail!("exactly one of --ek-context or --ek-context-handle must be provided")
-            }
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
         let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
         let ak_template = build_ak_public(&self.algorithm, hash_alg)?;
 
-        let ek_handle = load_key_from_source(&mut ctx, &self.ek_context_source()?)?;
+        let ek_handle = load_key_from_source(&mut ctx, &self.ek_context)?;
 
         let ak_auth = match &self.ak_auth {
             Some(a) => Some(parse::parse_auth(a)?),

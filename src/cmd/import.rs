@@ -11,7 +11,7 @@ use tss_esapi::traits::UnMarshall;
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_object_from_source};
-use crate::parse::{self, parse_hex_u32};
+use crate::parse::{self, parse_context_source};
 use crate::session::execute_with_optional_session;
 
 /// Import an external object into the TPM under a parent key.
@@ -19,17 +19,9 @@ use crate::session::execute_with_optional_session;
 /// Wraps TPM2_Import.
 #[derive(Parser)]
 pub struct ImportCmd {
-    /// Parent key context file path
-    #[arg(
-        short = 'C',
-        long = "parent-context",
-        conflicts_with = "parent_context_handle"
-    )]
-    pub parent_context: Option<PathBuf>,
-
-    /// Parent key handle (hex, e.g. 0x81000001)
-    #[arg(short = 'H', long = "parent-context-handle", value_parser = parse_hex_u32, conflicts_with = "parent_context")]
-    pub parent_context_handle: Option<u32>,
+    /// Parent key context (file:<path> or hex:<handle>)
+    #[arg(short = 'C', long = "parent-context", value_parser = parse_context_source)]
+    pub parent_context: ContextSource,
 
     /// Auth value for the parent key
     #[arg(short = 'P', long = "parent-auth")]
@@ -65,20 +57,10 @@ pub struct ImportCmd {
 }
 
 impl ImportCmd {
-    fn parent_context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.parent_context, self.parent_context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!(
-                "exactly one of --parent-context or --parent-context-handle must be provided"
-            ),
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let parent_handle = load_object_from_source(&mut ctx, &self.parent_context_source()?)?;
+        let parent_handle = load_object_from_source(&mut ctx, &self.parent_context)?;
 
         if let Some(ref auth_str) = self.parent_auth {
             let auth = parse::parse_auth(auth_str)?;

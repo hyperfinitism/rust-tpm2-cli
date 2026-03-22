@@ -168,21 +168,21 @@ tpm2 hash message.dat -g sha384 -o digest.bin -t ticket.bin
 tpm2 createprimary -C o -G ecc -c primary.ctx
 
 # Create an unrestricted signing key
-tpm2 create -C primary.ctx -G ecc -u key.pub -r key.priv
+tpm2 create -C file:primary.ctx -G ecc -u key.pub -r key.priv
 
 # Load the signing key
-tpm2 load -C primary.ctx -u key.pub -r key.priv -c key.ctx
+tpm2 load -C file:primary.ctx -u key.pub -r key.priv -c key.ctx
 
 # Hash a message
 echo -n "message" > message.dat
 tpm2 hash message.dat -g sha256 -o digest.bin
 
 # Sign the digest
-tpm2 sign -c key.ctx -g sha256 -s ecdsa -d digest.bin -o sig.bin
+tpm2 sign -c file:key.ctx -g sha256 -s ecdsa -d digest.bin -o sig.bin
 
 # Verify
-tpm2 verifysignature -c key.ctx -g sha256 -m message.dat -s sig.bin
-tpm2 verifysignature -c key.ctx -d digest.bin -s sig.bin
+tpm2 verifysignature -c file:key.ctx -g sha256 -m message.dat -s sig.bin
+tpm2 verifysignature -c file:key.ctx -d digest.bin -s sig.bin
 ```
 
 ### Attestation
@@ -190,28 +190,50 @@ tpm2 verifysignature -c key.ctx -d digest.bin -s sig.bin
 ```bash
 # Create and persist an Endorsement Key (EK)
 tpm2 createek -c ek.ctx -G ecc -u ek.pub
-tpm2 evictcontrol 0x81010001 -C o -c ek.ctx
+tpm2 evictcontrol 0x81010001 -C o -c file:ek.ctx
 
 # Create and persist an Attestation Key (AK) 
-tpm2 createak -C ek.ctx -c ak.ctx -G ecc -u ak.pub
-tpm2 evictcontrol 0x81000002 -C o -c ak.ctx
+tpm2 createak -C file:ek.ctx -c ak.ctx -G ecc -u ak.pub
+tpm2 evictcontrol 0x81000002 -C o -c file:ak.ctx
 
 # Generate a nonce for freshness
 tpm2 getrandom 32 -o nonce.bin
 
 # Quote PCRs 0–7 signed by the AK
-tpm2 quote -H 0x81000002 -l sha256:0,1,2,3,4,5,6,7 \
-    --qualification-file nonce.bin \
+tpm2 quote -c hex:0x81000002 -l sha256:0,1,2,3,4,5,6,7 \
+    -q file:nonce.bin \
     -m quote.bin -s sig.bin -o pcrs.bin
 
 # Verify the quote
-tpm2 checkquote -u ak.ctx -m quote.bin -s sig.bin \
+tpm2 checkquote -u hex:0x81000002 -m quote.bin -s sig.bin \
     -l sha256:0,1,2,3,4,5,6,7 \
-    --qualification-file nonce.bin \
+    -q file:nonce.bin \
     -f pcrs.bin
 
 # Verify quote signature only
-tpm2 verifysignature -c ak.ctx -g sha256 -m quote.bin -s sig.bin
+tpm2 verifysignature -c file:ak.ctx -g sha256 -m quote.bin -s sig.bin
+```
+
+### Signed timestamp
+
+```bash
+# Create a primary key under the owner hierarchy
+tpm2 createprimary -C o -G ecc -c primary.ctx
+
+# Create an unrestricted signing key
+tpm2 create -C file:primary.ctx -G ecc -u key.pub -r key.priv
+
+# Load the signing key
+tpm2 load -C file:primary.ctx -u key.pub -r key.priv -c key.ctx
+
+# Generate a nonce for freshness
+tpm2 getrandom 32 -o nonce.bin
+
+# Get signed timestamp
+tpm2 gettime -c file:key.ctx -g sha256 -q file:nonce.bin -o time-attest.bin -s time-sig.bin
+
+# Verify signature
+tpm2 verifysignature -c file:key.ctx -g sha256 -m time-attest.bin -s time-sig.bin
 ```
 
 ### NV indexes
@@ -272,10 +294,11 @@ It also benefits from a long track record and broad backward compatibility.
 `rust-tpm2-cli` introduces a number of deliberate improvements (breaking changes) for clarity and consistency:
 
 - **Explicit handle vs. context arguments**:
-  Where `tpm2-tools` accepts either a TPM handle (hex string) or a context file path through a single argument, `rust-tpm2-cli` provides dedicated arguments for each, making the type of the input unambiguous.
+  `tpm2-tools` accepts either a TPM handle (hex string) or a raw context file path through a single argument.
+  `rust-tpm2-cli` requires such arguments to have prefix `hex:` or `file:`, making the type of the input unambiguous.
 
 - **Extended context file support**:
-  Some arguments in `tpm2-tools` accept only a TPM handle in hex string form without an apparent reason.
+  Some arguments in `tpm2-tools` accept only a TPM handle in hex string form without an apparent reason (e.g. public key in `checkquote`).
   `rust-tpm2-cli` removes this restriction and allows a context file to be specified wherever it is semantically appropriate.
 
 - **Subcommand splitting**:

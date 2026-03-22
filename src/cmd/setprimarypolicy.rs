@@ -18,8 +18,8 @@ use crate::raw_esys::RawEsysContext;
 #[derive(Parser)]
 pub struct SetPrimaryPolicyCmd {
     /// Hierarchy (o/owner, e/endorsement, p/platform, l/lockout)
-    #[arg(short = 'C', long = "hierarchy")]
-    pub hierarchy: String,
+    #[arg(short = 'C', long = "hierarchy", value_parser = parse::parse_esys_hierarchy)]
+    pub hierarchy: u32,
 
     /// Auth value
     #[arg(short = 'P', long = "auth")]
@@ -37,7 +37,7 @@ pub struct SetPrimaryPolicyCmd {
 impl SetPrimaryPolicyCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
-        let auth_handle = RawEsysContext::resolve_hierarchy(&self.hierarchy)?;
+        let auth_handle = self.hierarchy;
 
         if let Some(ref auth_str) = self.auth {
             let auth = parse::parse_auth(auth_str)?;
