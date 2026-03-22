@@ -10,7 +10,7 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_object_from_source};
 use crate::output;
-use crate::parse::parse_hex_u32;
+use crate::parse::{self, parse_hex_u32};
 use crate::session::execute_with_optional_session;
 
 /// Unseal data previously sealed to a TPM object.
@@ -23,6 +23,10 @@ pub struct UnsealCmd {
     /// Sealed object handle (hex, e.g. 0x81000001)
     #[arg(short = 'H', long = "context-handle", value_parser = parse_hex_u32, conflicts_with = "context")]
     pub context_handle: Option<u32>,
+
+    /// Auth value for the sealed object
+    #[arg(short = 'p', long = "auth")]
+    pub auth: Option<String>,
 
     /// Output file for the unsealed data
     #[arg(short = 'o', long)]
@@ -46,6 +50,12 @@ impl UnsealCmd {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
         let obj_handle = load_object_from_source(&mut ctx, &self.context_source()?)?;
+
+        if let Some(ref auth_str) = self.auth {
+            let auth = parse::parse_auth(auth_str)?;
+            ctx.tr_set_auth(obj_handle, auth)
+                .context("failed to set sealed object auth")?;
+        }
 
         let session_path = self.session.as_deref();
         let sensitive =
