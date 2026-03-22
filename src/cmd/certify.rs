@@ -13,7 +13,9 @@ use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source, load_object_from_source};
 use crate::parse;
 use crate::parse::parse_hex_u32;
-use crate::session::execute_with_optional_session;
+use crate::session::load_session_from_file;
+use tss_esapi::constants::SessionType;
+use tss_esapi::interface_types::session_handles::AuthSession;
 
 /// Certify that an object is loaded in the TPM.
 ///
@@ -144,11 +146,16 @@ impl CertifyCmd {
             }
         };
 
-        let session_path = self.session.as_deref();
-        let (attest, signature) = execute_with_optional_session(&mut ctx, session_path, |ctx| {
-            ctx.certify(object_handle, signing_key, qualifying.clone(), scheme)
-        })
-        .context("TPM2_Certify failed")?;
+        let session1 = match &self.session {
+            Some(path) => load_session_from_file(&mut ctx, path, SessionType::Hmac)?,
+            None => AuthSession::Password,
+        };
+        ctx.set_sessions((Some(session1), Some(AuthSession::Password), None));
+        let result = ctx
+            .certify(object_handle, signing_key, qualifying.clone(), scheme)
+            .map_err(|e| anyhow::anyhow!(e));
+        ctx.clear_sessions();
+        let (attest, signature) = result.context("TPM2_Certify failed")?;
 
         if let Some(ref path) = self.attestation {
             let bytes = attest.marshall().context("failed to marshal TPMS_ATTEST")?;
