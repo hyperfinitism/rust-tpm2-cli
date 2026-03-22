@@ -10,19 +10,15 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_object_from_source};
 use crate::output;
-use crate::parse::{self, parse_hex_u32};
+use crate::parse::{self, parse_context_source};
 use crate::session::execute_with_optional_session;
 
 /// Unseal data previously sealed to a TPM object.
 #[derive(Parser)]
 pub struct UnsealCmd {
-    /// Sealed object context file path
-    #[arg(short = 'c', long = "context", conflicts_with = "context_handle")]
-    pub context: Option<PathBuf>,
-
-    /// Sealed object handle (hex, e.g. 0x81000001)
-    #[arg(short = 'H', long = "context-handle", value_parser = parse_hex_u32, conflicts_with = "context")]
-    pub context_handle: Option<u32>,
+    /// Sealed object context (file:<path> or hex:<handle>)
+    #[arg(short = 'c', long = "context", value_parser = parse_context_source)]
+    pub context: ContextSource,
 
     /// Auth value for the sealed object
     #[arg(short = 'p', long = "auth")]
@@ -38,18 +34,10 @@ pub struct UnsealCmd {
 }
 
 impl UnsealCmd {
-    fn context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.context, self.context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!("exactly one of --context or --context-handle must be provided"),
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let obj_handle = load_object_from_source(&mut ctx, &self.context_source()?)?;
+        let obj_handle = load_object_from_source(&mut ctx, &self.context)?;
 
         if let Some(ref auth_str) = self.auth {
             let auth = parse::parse_auth(auth_str)?;

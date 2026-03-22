@@ -12,7 +12,7 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
 use crate::output;
-use crate::parse::{self, parse_hex_u32};
+use crate::parse::{self, parse_context_source};
 use crate::session::execute_with_optional_session;
 
 /// Decrypt data with a symmetric key held by the TPM.
@@ -21,17 +21,9 @@ use crate::session::execute_with_optional_session;
 /// output file (or stdout).
 #[derive(Parser)]
 pub struct DecryptCmd {
-    /// Symmetric key context file path
-    #[arg(
-        short = 'c',
-        long = "key-context",
-        conflicts_with = "key_context_handle"
-    )]
-    pub key_context: Option<PathBuf>,
-
-    /// Symmetric key handle (hex, e.g. 0x81000001)
-    #[arg(short = 'H', long = "key-context-handle", value_parser = parse_hex_u32, conflicts_with = "key_context")]
-    pub key_context_handle: Option<u32>,
+    /// Symmetric key context (file:<path> or hex:<handle>)
+    #[arg(short = 'c', long = "key-context", value_parser = parse_context_source)]
+    pub key_context: ContextSource,
 
     /// Authorization value for the key
     #[arg(short = 'p', long = "auth")]
@@ -63,20 +55,10 @@ pub struct DecryptCmd {
 }
 
 impl DecryptCmd {
-    fn context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.key_context, self.key_context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!(
-                "exactly one of --key-context or --key-context-handle must be provided"
-            ),
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let key_handle = load_key_from_source(&mut ctx, &self.context_source()?)?;
+        let key_handle = load_key_from_source(&mut ctx, &self.key_context)?;
         let mode = parse::parse_symmetric_mode(&self.mode)?;
 
         if let Some(ref auth_str) = self.auth {

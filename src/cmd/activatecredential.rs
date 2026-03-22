@@ -14,8 +14,7 @@ use tss_esapi::structures::{EncryptedSecret, IdObject};
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
-use crate::parse;
-use crate::parse::parse_hex_u32;
+use crate::parse::{self, parse_context_source};
 use crate::session::{flush_policy_session, load_session_from_file, start_ek_policy_session};
 
 /// Activate a credential associated with a TPM object.
@@ -25,29 +24,13 @@ use crate::session::{flush_policy_session, load_session_from_file, start_ek_poli
 /// an EK) and verifies the binding to the credentialed key (typically an AK).
 #[derive(Parser)]
 pub struct ActivateCredentialCmd {
-    /// Credentialed key context file — the object the credential is bound to (AK)
-    #[arg(
-        short = 'c',
-        long = "credentialedkey-context",
-        conflicts_with = "credentialed_context_handle"
-    )]
-    pub credentialed_context: Option<PathBuf>,
+    /// Credentialed key context — the object the credential is bound to (file:<path> or hex:<handle>)
+    #[arg(short = 'c', long = "credentialedkey-context", value_parser = parse_context_source)]
+    pub credentialed_context: ContextSource,
 
-    /// Credentialed key handle (hex, e.g. 0x81000001)
-    #[arg(long = "credentialedkey-context-handle", value_parser = parse_hex_u32, conflicts_with = "credentialed_context")]
-    pub credentialed_context_handle: Option<u32>,
-
-    /// Credential key context file — the key used to decrypt the seed (EK)
-    #[arg(
-        short = 'C',
-        long = "credentialkey-context",
-        conflicts_with = "credential_key_context_handle"
-    )]
-    pub credential_key_context: Option<PathBuf>,
-
-    /// Credential key handle (hex, e.g. 0x81000001)
-    #[arg(long = "credentialkey-context-handle", value_parser = parse_hex_u32, conflicts_with = "credential_key_context")]
-    pub credential_key_context_handle: Option<u32>,
+    /// Credential key context — the key used to decrypt the seed (file:<path> or hex:<handle>)
+    #[arg(short = 'C', long = "credentialkey-context", value_parser = parse_context_source)]
+    pub credential_key_context: ContextSource,
 
     /// Auth value for the credentialed key
     #[arg(short = 'p', long = "credentialedkey-auth")]
@@ -71,34 +54,11 @@ pub struct ActivateCredentialCmd {
 }
 
 impl ActivateCredentialCmd {
-    fn credentialed_context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.credentialed_context, self.credentialed_context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!(
-                "exactly one of --credentialedkey-context or --credentialedkey-context-handle must be provided"
-            ),
-        }
-    }
-
-    fn credential_key_context_source(&self) -> anyhow::Result<ContextSource> {
-        match (
-            &self.credential_key_context,
-            self.credential_key_context_handle,
-        ) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!(
-                "exactly one of --credentialkey-context or --credentialkey-context-handle must be provided"
-            ),
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let activate_handle = load_key_from_source(&mut ctx, &self.credentialed_context_source()?)?;
-        let key_handle = load_key_from_source(&mut ctx, &self.credential_key_context_source()?)?;
+        let activate_handle = load_key_from_source(&mut ctx, &self.credentialed_context)?;
+        let key_handle = load_key_from_source(&mut ctx, &self.credential_key_context)?;
 
         // Set auth on the credentialed key (AK) if provided.
         if let Some(ref a) = self.credentialed_auth {

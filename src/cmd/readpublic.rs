@@ -11,18 +11,14 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
 use crate::output;
-use crate::parse::parse_hex_u32;
+use crate::parse::parse_context_source;
 
 /// Read the public area of a loaded object.
 #[derive(Parser)]
 pub struct ReadPublicCmd {
-    /// Object context file path
-    #[arg(short = 'c', long = "context", conflicts_with = "context_handle")]
-    pub context: Option<PathBuf>,
-
-    /// Object handle (hex, e.g. 0x81000001)
-    #[arg(short = 'H', long = "context-handle", value_parser = parse_hex_u32, conflicts_with = "context")]
-    pub context_handle: Option<u32>,
+    /// Object context (file:<path> or hex:<handle>)
+    #[arg(short = 'c', long = "context", value_parser = parse_context_source)]
+    pub context: ContextSource,
 
     /// Output file for the public area (binary)
     #[arg(short = 'o', long)]
@@ -30,18 +26,10 @@ pub struct ReadPublicCmd {
 }
 
 impl ReadPublicCmd {
-    fn context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.context, self.context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!("exactly one of --context or --context-handle must be provided"),
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let key_handle = load_key_from_source(&mut ctx, &self.context_source()?)?;
+        let key_handle = load_key_from_source(&mut ctx, &self.context)?;
 
         let (public, name, qualified_name) = ctx
             .execute_without_session(|ctx| ctx.read_public(key_handle))

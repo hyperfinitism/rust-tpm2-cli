@@ -8,7 +8,7 @@ use log::info;
 
 use crate::cli::GlobalOpts;
 use crate::handle::ContextSource;
-use crate::parse::parse_hex_u32;
+use crate::parse::parse_context_source;
 use crate::raw_esys;
 
 /// Perform the first part of an ECC anonymous signing operation.
@@ -18,13 +18,9 @@ use crate::raw_esys;
 /// must use the ECDAA scheme.
 #[derive(Parser)]
 pub struct CommitCmd {
-    /// Signing key context file path
-    #[arg(short = 'c', long = "context", conflicts_with = "context_handle")]
-    pub context: Option<PathBuf>,
-
-    /// Signing key handle (hex, e.g. 0x81000001)
-    #[arg(short = 'H', long = "context-handle", value_parser = parse_hex_u32, conflicts_with = "context")]
-    pub context_handle: Option<u32>,
+    /// Signing key context (file:<path> or hex:<handle>)
+    #[arg(short = 'c', long = "context", value_parser = parse_context_source)]
+    pub context: ContextSource,
 
     /// Auth value for the signing key
     #[arg(short = 'p', long = "auth")]
@@ -60,14 +56,6 @@ pub struct CommitCmd {
 }
 
 impl CommitCmd {
-    fn context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.context, self.context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!("exactly one of --context or --context-handle must be provided"),
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let p1 = read_opt_file(&self.eccpoint_p)?;
         let s2 = read_opt_file(&self.basepoint_x)?;
@@ -75,7 +63,7 @@ impl CommitCmd {
 
         let result = raw_esys::commit(
             global.tcti.as_deref(),
-            &self.context_source()?,
+            &self.context,
             self.auth.as_deref(),
             p1.as_deref(),
             s2.as_deref(),

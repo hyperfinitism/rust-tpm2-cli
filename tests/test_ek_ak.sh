@@ -28,7 +28,7 @@ tpm2 flushcontext --transient-object 2>/dev/null || true
 
 # -- createak --
 run_test "createak RSA" bash -c '
-    tpm2 createak -C "$TEST_TMPDIR/ek.ctx" -c "$TEST_TMPDIR/ak.ctx" \
+    tpm2 createak -C "file:$TEST_TMPDIR/ek.ctx" -c "$TEST_TMPDIR/ak.ctx" \
         -G rsa -g sha256 \
         -u "$TEST_TMPDIR/ak_pub.bin" -r "$TEST_TMPDIR/ak_priv.bin" \
         -n "$TEST_TMPDIR/ak_name.bin" 2>/dev/null &&
@@ -49,8 +49,8 @@ run_test "makecredential" bash -c '
 # -- activatecredential --
 run_test "activatecredential" bash -c '
     tpm2 activatecredential \
-        -c "$TEST_TMPDIR/ak.ctx" \
-        -C "$TEST_TMPDIR/ek.ctx" \
+        -c "file:$TEST_TMPDIR/ak.ctx" \
+        -C "file:$TEST_TMPDIR/ek.ctx" \
         -i "$TEST_TMPDIR/cred_blob.bin" \
         -o "$TEST_TMPDIR/certinfo.bin" 2>/dev/null &&
     diff "$TEST_TMPDIR/secret.bin" "$TEST_TMPDIR/certinfo.bin"

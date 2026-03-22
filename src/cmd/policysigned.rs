@@ -14,7 +14,7 @@ use tss_esapi::tss2_esys::TPMT_TK_AUTH;
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_object_from_source};
-use crate::parse::parse_hex_u32;
+use crate::parse::parse_context_source;
 use crate::session::load_session_from_file;
 
 /// Authorize a policy with a signed authorization.
@@ -26,17 +26,9 @@ pub struct PolicySignedCmd {
     #[arg(short = 'S', long = "session")]
     pub session: PathBuf,
 
-    /// Signing key context file path
-    #[arg(
-        short = 'c',
-        long = "key-context",
-        conflicts_with = "key_context_handle"
-    )]
-    pub key_context: Option<PathBuf>,
-
-    /// Signing key handle (hex, e.g. 0x81000001)
-    #[arg(short = 'H', long = "key-context-handle", value_parser = parse_hex_u32, conflicts_with = "key_context")]
-    pub key_context_handle: Option<u32>,
+    /// Signing key context (file:<path> or hex:<handle>)
+    #[arg(short = 'c', long = "key-context", value_parser = parse_context_source)]
+    pub key_context: ContextSource,
 
     /// Signature file (marshaled TPMT_SIGNATURE)
     #[arg(short = 's', long = "signature")]
@@ -50,9 +42,9 @@ pub struct PolicySignedCmd {
     #[arg(long = "cphash-input")]
     pub cphash_input: Option<PathBuf>,
 
-    /// Policy reference / nonce file (optional)
-    #[arg(short = 'q', long = "qualification")]
-    pub qualification: Option<PathBuf>,
+    /// Policy reference (digest) (hex:<hex_bytes> or file:<path>)
+    #[arg(short = 'q', long = "qualification", value_parser = crate::parse::parse_qualification)]
+    pub qualification: Option<crate::parse::Qualification>,
 
     /// Output file for the timeout
     #[arg(short = 't', long = "timeout")]
@@ -68,16 +60,6 @@ pub struct PolicySignedCmd {
 }
 
 impl PolicySignedCmd {
-    fn key_context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.key_context, self.key_context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!(
-                "exactly one of --key-context or --key-context-handle must be provided"
-            ),
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
@@ -86,7 +68,7 @@ impl PolicySignedCmd {
             .try_into()
             .map_err(|_| anyhow::anyhow!("expected a policy session"))?;
 
-        let auth_object = load_object_from_source(&mut ctx, &self.key_context_source()?)?;
+        let auth_object = load_object_from_source(&mut ctx, &self.key_context)?;
 
         let sig_data = std::fs::read(&self.signature)
             .with_context(|| format!("reading signature from {}", self.signature.display()))?;
@@ -102,10 +84,8 @@ impl PolicySignedCmd {
         };
 
         let policy_ref = match &self.qualification {
-            Some(path) => {
-                let data = std::fs::read(path)?;
-                Nonce::try_from(data).map_err(|e| anyhow::anyhow!("invalid policy ref: {e}"))?
-            }
+            Some(bytes) => Nonce::try_from(bytes.as_slice())
+                .map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?,
             None => Nonce::default(),
         };
 

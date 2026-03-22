@@ -17,7 +17,7 @@ echo -n "plaintext data!!" > "$TEST_TMPDIR/plain.bin"  # 16 bytes for AES block
 
 # Test rsaencrypt connecting to TPM (may fail on key attributes but exercises the path).
 run_test "rsaencrypt (connects to TPM)" bash -c '
-    tpm2 rsaencrypt -c "$TEST_TMPDIR/primary.ctx" \
+    tpm2 rsaencrypt -c "file:$TEST_TMPDIR/primary.ctx" \
         -i "$TEST_TMPDIR/plain.bin" -o "$TEST_TMPDIR/cipher_rsa.bin" 2>&1 || true
 '
 

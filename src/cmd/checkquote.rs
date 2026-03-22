@@ -11,8 +11,7 @@ use tss_esapi::traits::UnMarshall;
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
-use crate::parse;
-use crate::parse::parse_hex_u32;
+use crate::parse::{self, parse_context_source};
 
 /// Verify a TPM quote.
 ///
@@ -21,13 +20,9 @@ use crate::parse::parse_hex_u32;
 /// attestation structure.
 #[derive(Parser)]
 pub struct CheckQuoteCmd {
-    /// Public key context file path
-    #[arg(short = 'u', long = "public", conflicts_with = "public_handle")]
-    pub public: Option<PathBuf>,
-
-    /// Public key handle (hex, e.g. 0x81000001)
-    #[arg(short = 'H', long = "public-handle", value_parser = parse_hex_u32, conflicts_with = "public")]
-    pub public_handle: Option<u32>,
+    /// Public key context (file:<path> or hex:<handle>)
+    #[arg(short = 'u', long = "public", value_parser = parse_context_source)]
+    pub public: ContextSource,
 
     /// Quote message file (marshaled TPMS_ATTEST)
     #[arg(short = 'm', long = "message")]
@@ -49,32 +44,16 @@ pub struct CheckQuoteCmd {
     #[arg(short = 'l', long = "pcr-list")]
     pub pcr_list: Option<String>,
 
-    /// Qualification data (hex string) for replay-protection check
-    #[arg(
-        short = 'q',
-        long = "qualification",
-        conflicts_with = "qualification_file"
-    )]
-    pub qualification: Option<String>,
-
-    /// Qualifying data file path
-    #[arg(long = "qualification-file", conflicts_with = "qualification")]
-    pub qualification_file: Option<PathBuf>,
+    /// Qualification data (hex:<hex_bytes> or file:<path>)
+    #[arg(short = 'q', long = "qualification", value_parser = parse::parse_qualification)]
+    pub qualification: Option<parse::Qualification>,
 }
 
 impl CheckQuoteCmd {
-    fn public_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.public, self.public_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!("exactly one of --public or --public-handle must be provided"),
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let key_handle = load_key_from_source(&mut ctx, &self.public_source()?)?;
+        let key_handle = load_key_from_source(&mut ctx, &self.public)?;
         let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
 
         // ---------------------------------------------------------------
@@ -128,22 +107,12 @@ impl CheckQuoteCmd {
         // ---------------------------------------------------------------
         // 4. Check qualification (extraData / nonce)
         // ---------------------------------------------------------------
-        let qualification_data = match (&self.qualification, &self.qualification_file) {
-            (Some(q), None) => Some(
-                parse::parse_qualification_hex(q).context("failed to parse qualification data")?,
-            ),
-            (None, Some(path)) => Some(
-                parse::parse_qualification_file(path)
-                    .context("failed to parse qualification data")?,
-            ),
-            _ => None,
-        };
-        if let Some(ref expected) = qualification_data {
+        if let Some(ref expected) = self.qualification {
             if attest.extra_data().value() != expected.as_slice() {
                 bail!(
                     "qualification mismatch: quote contains {:?}, expected {:?}",
                     hex::encode(attest.extra_data().value()),
-                    hex::encode(expected)
+                    hex::encode(expected.as_slice())
                 );
             }
             info!("qualification check: OK");

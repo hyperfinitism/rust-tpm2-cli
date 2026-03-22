@@ -8,6 +8,8 @@ use log::info;
 use tss_esapi::handles::NvIndexTpmHandle;
 use tss_esapi::structures::NvPublicBuilder;
 
+use tss_esapi::interface_types::resource_handles::Provision;
+
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::parse::{self, parse_hex_u32};
@@ -21,8 +23,8 @@ pub struct NvDefineCmd {
     pub nv_index: u32,
 
     /// Authorization hierarchy (o/owner, p/platform)
-    #[arg(short = 'C', long = "hierarchy", default_value = "o")]
-    pub hierarchy: String,
+    #[arg(short = 'C', long = "hierarchy", default_value = "o", value_parser = parse::parse_provision)]
+    pub hierarchy: Provision,
 
     /// Size of the NV area in bytes
     #[arg(short = 's', long = "size", default_value = "0")]
@@ -53,7 +55,6 @@ impl NvDefineCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let provision = parse::parse_provision(&self.hierarchy)?;
         let nv_handle = NvIndexTpmHandle::new(self.nv_index)
             .map_err(|e| anyhow::anyhow!("invalid NV index handle: {e}"))?;
         let alg = parse::parse_hashing_algorithm(&self.algorithm)?;
@@ -75,7 +76,7 @@ impl NvDefineCmd {
 
         let session_path = self.session.as_deref();
         execute_with_optional_session(&mut ctx, session_path, |ctx| {
-            ctx.nv_define_space(provision, auth.clone(), nv_public.clone())
+            ctx.nv_define_space(self.hierarchy, auth.clone(), nv_public.clone())
         })
         .context("TPM2_NV_DefineSpace failed")?;
 

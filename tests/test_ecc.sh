@@ -25,7 +25,7 @@ tpm2 createprimary -C o -G ecc -g sha256 -c "$TEST_TMPDIR/ecc_primary.ctx" 2>/de
 
 # -- ecdhkeygen --
 run_test "ecdhkeygen" bash -c '
-    tpm2 ecdhkeygen -c "$TEST_TMPDIR/ecc_primary.ctx" \
+    tpm2 ecdhkeygen -c "file:$TEST_TMPDIR/ecc_primary.ctx" \
         -u "$TEST_TMPDIR/ecdh_pub.bin" -o "$TEST_TMPDIR/ecdh_z.bin" 2>/dev/null &&
     [ -s "$TEST_TMPDIR/ecdh_pub.bin" ] && [ -s "$TEST_TMPDIR/ecdh_z.bin" ]
 '

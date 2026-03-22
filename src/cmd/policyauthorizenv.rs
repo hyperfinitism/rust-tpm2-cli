@@ -7,7 +7,7 @@ use log::info;
 use tss_esapi::tss2_esys::*;
 
 use crate::cli::GlobalOpts;
-use crate::parse;
+use crate::parse::{self, NvAuthEntity};
 use crate::raw_esys::RawEsysContext;
 
 /// Assert policy using a policy stored in an NV index.
@@ -24,8 +24,8 @@ pub struct PolicyAuthorizeNvCmd {
     pub nv_index: String,
 
     /// Auth hierarchy for the NV index (o/p/e or nv)
-    #[arg(short = 'C', long = "hierarchy", default_value = "o")]
-    pub hierarchy: String,
+    #[arg(short = 'C', long = "hierarchy", default_value = "o", value_parser = parse::parse_nv_auth_entity)]
+    pub hierarchy: NvAuthEntity,
 
     /// Auth value for the hierarchy
     #[arg(short = 'P', long = "auth")]
@@ -43,11 +43,7 @@ impl PolicyAuthorizeNvCmd {
 
         let nv_handle = raw.resolve_nv_index(&self.nv_index)?;
 
-        let auth_handle = if self.hierarchy == "nv" {
-            nv_handle
-        } else {
-            RawEsysContext::resolve_hierarchy(&self.hierarchy)?
-        };
+        let auth_handle = RawEsysContext::resolve_nv_auth_entity(self.hierarchy, nv_handle);
 
         if let Some(ref auth_str) = self.auth {
             let a = parse::parse_auth(auth_str)?;

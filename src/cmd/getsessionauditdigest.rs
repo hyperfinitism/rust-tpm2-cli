@@ -2,15 +2,15 @@
 
 use std::path::PathBuf;
 
-use anyhow::Context;
 use clap::Parser;
 use log::info;
 use tss_esapi::constants::tss::*;
+use tss_esapi::structures::Data;
 use tss_esapi::tss2_esys::*;
 
 use crate::cli::GlobalOpts;
 use crate::handle::ContextSource;
-use crate::parse::{self, parse_hex_u32};
+use crate::parse::{self, parse_context_source};
 use crate::raw_esys::{self, RawEsysContext};
 
 /// Get the session audit digest signed by a key.
@@ -18,21 +18,13 @@ use crate::raw_esys::{self, RawEsysContext};
 /// Wraps TPM2_GetSessionAuditDigest (raw FFI).
 #[derive(Parser)]
 pub struct GetSessionAuditDigestCmd {
-    /// Signing key context file path
-    #[arg(
-        short = 'c',
-        long = "signing-key-context",
-        conflicts_with = "signing_key_context_handle"
-    )]
-    pub signing_key_context: Option<PathBuf>,
-
-    /// Signing key handle (hex, e.g. 0x81000001)
-    #[arg(long = "signing-key-context-handle", value_parser = parse_hex_u32, conflicts_with = "signing_key_context")]
-    pub signing_key_context_handle: Option<u32>,
+    /// Signing key context (file:<path> or hex:<handle>)
+    #[arg(short = 'c', long = "signing-key-context", value_parser = parse_context_source)]
+    pub signing_key_context: ContextSource,
 
     /// Auth hierarchy for the privacy admin (e/endorsement)
-    #[arg(short = 'C', long = "privacy-admin", default_value = "e")]
-    pub privacy_admin: String,
+    #[arg(short = 'C', long = "privacy-admin", default_value = "e", value_parser = parse::parse_esys_hierarchy)]
+    pub privacy_admin: u32,
 
     /// Session context file to audit
     #[arg(short = 'S', long = "session")]
@@ -46,9 +38,9 @@ pub struct GetSessionAuditDigestCmd {
     #[arg(short = 'p', long = "hierarchy-auth")]
     pub hierarchy_auth: Option<String>,
 
-    /// Qualifying data (nonce, hex)
-    #[arg(short = 'q', long = "qualification")]
-    pub qualification: Option<String>,
+    /// Qualifying data (hex:<hex_bytes> or file:<path>)
+    #[arg(short = 'q', long = "qualification", value_parser = crate::parse::parse_qualification)]
+    pub qualification: Option<crate::parse::Qualification>,
 
     /// Output file for the attestation data
     #[arg(short = 'o', long = "attestation")]
@@ -60,20 +52,10 @@ pub struct GetSessionAuditDigestCmd {
 }
 
 impl GetSessionAuditDigestCmd {
-    fn signing_key_context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.signing_key_context, self.signing_key_context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!(
-                "exactly one of --signing-key-context or --signing-key-context-handle must be provided"
-            ),
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
-        let privacy_handle = RawEsysContext::resolve_hierarchy(&self.privacy_admin)?;
-        let sign_handle = raw.resolve_handle_from_source(&self.signing_key_context_source()?)?;
+        let privacy_handle = self.privacy_admin;
+        let sign_handle = raw.resolve_handle_from_source(&self.signing_key_context)?;
 
         // Load session via raw context_load
         let session_handle = raw.context_load(
@@ -91,12 +73,12 @@ impl GetSessionAuditDigestCmd {
             raw.set_auth(sign_handle, auth.value())?;
         }
 
-        let mut qualifying_data = TPM2B_DATA::default();
-        if let Some(ref q) = self.qualification {
-            let bytes = hex::decode(q).context("invalid qualifying data hex")?;
-            qualifying_data.size = bytes.len() as u16;
-            qualifying_data.buffer[..bytes.len()].copy_from_slice(&bytes);
-        }
+        let qualifying_data: TPM2B_DATA = match &self.qualification {
+            Some(bytes) => Data::try_from(bytes.as_slice())
+                .map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?
+                .into(),
+            None => TPM2B_DATA::default(),
+        };
 
         let scheme = TPMT_SIG_SCHEME {
             scheme: TPM2_ALG_NULL,

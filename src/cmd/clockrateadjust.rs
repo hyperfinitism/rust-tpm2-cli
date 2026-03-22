@@ -15,8 +15,8 @@ use crate::raw_esys::RawEsysContext;
 #[derive(Parser)]
 pub struct ClockRateAdjustCmd {
     /// Auth hierarchy (o/owner or p/platform)
-    #[arg(short = 'c', long = "hierarchy", default_value = "o")]
-    pub hierarchy: String,
+    #[arg(short = 'c', long = "hierarchy", default_value = "o", value_parser = parse::parse_esys_hierarchy)]
+    pub hierarchy: u32,
 
     /// Auth value
     #[arg(short = 'p', long = "auth")]
@@ -30,7 +30,7 @@ pub struct ClockRateAdjustCmd {
 impl ClockRateAdjustCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
-        let auth_handle = RawEsysContext::resolve_hierarchy(&self.hierarchy)?;
+        let auth_handle = self.hierarchy;
 
         if let Some(ref auth_str) = self.auth {
             let auth = parse::parse_auth(auth_str)?;

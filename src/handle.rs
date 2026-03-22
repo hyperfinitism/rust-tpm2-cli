@@ -24,9 +24,9 @@ use tss_esapi::utils::TpmsContext;
 /// filename.  The CLI layer decides which variant applies at parse time.
 #[derive(Debug, Clone)]
 pub enum ContextSource {
-    /// A JSON context file path (from `--context` / `-c`).
+    /// A JSON context file path (from `file:<path>` syntax).
     File(PathBuf),
-    /// A raw persistent TPM handle (from `--context-handle` / `-H`).
+    /// A raw persistent TPM handle (from `hex:<handle>` syntax).
     Handle(u32),
 }
 

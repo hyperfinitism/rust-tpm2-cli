@@ -9,6 +9,8 @@ use log::info;
 use tss_esapi::structures::MaxBuffer;
 use tss_esapi::tss2_esys::TPMT_TK_HASHCHECK;
 
+use tss_esapi::interface_types::resource_handles::Hierarchy;
+
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::output;
@@ -24,8 +26,8 @@ pub struct HashCmd {
     pub algorithm: String,
 
     /// Hierarchy for the ticket (owner, endorsement, platform, null)
-    #[arg(short = 'C', long = "hierarchy", default_value = "owner")]
-    pub hierarchy: String,
+    #[arg(short = 'C', long = "hierarchy", default_value = "owner", value_parser = parse::parse_hierarchy)]
+    pub hierarchy: Hierarchy,
 
     /// Input file (default: stdin)
     pub input_file: Option<PathBuf>,
@@ -48,14 +50,13 @@ impl HashCmd {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
         let alg = parse::parse_hashing_algorithm(&self.algorithm)?;
-        let hierarchy = parse::parse_hierarchy(&self.hierarchy)?;
 
         let data = read_input(&self.input_file)?;
         let buffer =
             MaxBuffer::try_from(data).map_err(|e| anyhow::anyhow!("input too large: {e}"))?;
 
         let (digest, ticket) = ctx
-            .execute_without_session(|ctx| ctx.hash(buffer.clone(), alg, hierarchy))
+            .execute_without_session(|ctx| ctx.hash(buffer.clone(), alg, self.hierarchy))
             .context("TPM2_Hash failed")?;
 
         let bytes = digest.value();

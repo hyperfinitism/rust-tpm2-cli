@@ -23,42 +23,42 @@ run_test "createprimary with auth" bash -c '
 
 # -- readpublic --
 run_test "readpublic" bash -c '
-    tpm2 readpublic -c "$TEST_TMPDIR/primary.ctx" -o "$TEST_TMPDIR/primary_pub.bin" 2>/dev/null &&
+    tpm2 readpublic -c "file:$TEST_TMPDIR/primary.ctx" -o "$TEST_TMPDIR/primary_pub.bin" 2>/dev/null &&
     [ -s "$TEST_TMPDIR/primary_pub.bin" ]
 '
 
 # -- create (child key) --
 run_test "create RSA child key" bash -c '
-    tpm2 create -C "$TEST_TMPDIR/primary.ctx" -G rsa -g sha256 \
+    tpm2 create -C "file:$TEST_TMPDIR/primary.ctx" -G rsa -g sha256 \
         -r "$TEST_TMPDIR/child.priv" -u "$TEST_TMPDIR/child.pub" 2>/dev/null &&
     [ -s "$TEST_TMPDIR/child.priv" ] && [ -s "$TEST_TMPDIR/child.pub" ]
 '
 run_test "create ECC child key" bash -c '
-    tpm2 create -C "$TEST_TMPDIR/primary.ctx" -G ecc -g sha256 \
+    tpm2 create -C "file:$TEST_TMPDIR/primary.ctx" -G ecc -g sha256 \
         -r "$TEST_TMPDIR/child_ecc.priv" -u "$TEST_TMPDIR/child_ecc.pub" 2>/dev/null &&
     [ -s "$TEST_TMPDIR/child_ecc.priv" ] && [ -s "$TEST_TMPDIR/child_ecc.pub" ]
 '
 run_test "create child key with auth" bash -c '
-    tpm2 create -C "$TEST_TMPDIR/primary.ctx" -G rsa -g sha256 -p "childpass" \
+    tpm2 create -C "file:$TEST_TMPDIR/primary.ctx" -G rsa -g sha256 -p "childpass" \
         -r "$TEST_TMPDIR/child_auth.priv" -u "$TEST_TMPDIR/child_auth.pub" 2>/dev/null
 '
 
 # -- load --
 run_test "load RSA child key" bash -c '
-    tpm2 load -C "$TEST_TMPDIR/primary.ctx" \
+    tpm2 load -C "file:$TEST_TMPDIR/primary.ctx" \
         -r "$TEST_TMPDIR/child.priv" -u "$TEST_TMPDIR/child.pub" \
         -c "$TEST_TMPDIR/child.ctx" 2>/dev/null &&
     [ -s "$TEST_TMPDIR/child.ctx" ]
 '
 run_test "load ECC child key" bash -c '
-    tpm2 load -C "$TEST_TMPDIR/primary.ctx" \
+    tpm2 load -C "file:$TEST_TMPDIR/primary.ctx" \
         -r "$TEST_TMPDIR/child_ecc.priv" -u "$TEST_TMPDIR/child_ecc.pub" \
         -c "$TEST_TMPDIR/child_ecc.ctx" 2>/dev/null
 '
 
 # -- readpublic on loaded child --
 run_test "readpublic loaded child" bash -c '
-    tpm2 readpublic -c "$TEST_TMPDIR/child.ctx" 2>/dev/null
+    tpm2 readpublic -c "file:$TEST_TMPDIR/child.ctx" 2>/dev/null
 '
 
 # -- flushcontext --
@@ -69,13 +69,13 @@ run_test "flushcontext" bash -c '
 # -- evictcontrol (persist and evict) --
 run_test "evictcontrol persist" bash -c '
     tpm2 createprimary -C o -c "$TEST_TMPDIR/evict_primary.ctx" 2>/dev/null &&
-    tpm2 evictcontrol -C o -c "$TEST_TMPDIR/evict_primary.ctx" 0x81000010 2>/dev/null
+    tpm2 evictcontrol -C o -c "file:$TEST_TMPDIR/evict_primary.ctx" 0x81000010 2>/dev/null
 '
 run_test "readpublic persistent handle" bash -c '
-    tpm2 readpublic -H 0x81000010 2>/dev/null
+    tpm2 readpublic -c hex:0x81000010 2>/dev/null
 '
 run_test "evictcontrol evict" bash -c '
-    tpm2 evictcontrol -C o --context-handle 0x81000010 0x81000010 2>/dev/null
+    tpm2 evictcontrol -C o -c hex:0x81000010 0x81000010 2>/dev/null
 '
 
 # -- changeauth (hierarchy) --
@@ -87,13 +87,13 @@ run_test "changeauth owner hierarchy" bash -c '
 # -- changeauth (object) --
 run_test "changeauth object" bash -c '
     tpm2 createprimary -C o -c "$TEST_TMPDIR/ca_parent.ctx" 2>/dev/null &&
-    tpm2 create -C "$TEST_TMPDIR/ca_parent.ctx" -G rsa -p "old" \
+    tpm2 create -C "file:$TEST_TMPDIR/ca_parent.ctx" -G rsa -p "old" \
         -r "$TEST_TMPDIR/ca.priv" -u "$TEST_TMPDIR/ca.pub" 2>/dev/null &&
-    tpm2 load -C "$TEST_TMPDIR/ca_parent.ctx" \
+    tpm2 load -C "file:$TEST_TMPDIR/ca_parent.ctx" \
         -r "$TEST_TMPDIR/ca.priv" -u "$TEST_TMPDIR/ca.pub" \
         -c "$TEST_TMPDIR/ca.ctx" 2>/dev/null &&
-    tpm2 changeauth -c "$TEST_TMPDIR/ca.ctx" \
-        -C "$TEST_TMPDIR/ca_parent.ctx" \
+    tpm2 changeauth -c "file:$TEST_TMPDIR/ca.ctx" \
+        -C "file:$TEST_TMPDIR/ca_parent.ctx" \
         -p "old" -r "new" -o "$TEST_TMPDIR/ca_new.priv" 2>/dev/null &&
     [ -s "$TEST_TMPDIR/ca_new.priv" ]
 '
@@ -101,7 +101,7 @@ run_test "changeauth object" bash -c '
 # -- loadexternal --
 run_test "loadexternal public key" bash -c '
     tpm2 createprimary -C o -c "$TEST_TMPDIR/le_primary.ctx" 2>/dev/null &&
-    tpm2 readpublic -c "$TEST_TMPDIR/le_primary.ctx" -o "$TEST_TMPDIR/le_pub.bin" 2>/dev/null &&
+    tpm2 readpublic -c "file:$TEST_TMPDIR/le_primary.ctx" -o "$TEST_TMPDIR/le_pub.bin" 2>/dev/null &&
     tpm2 loadexternal -u "$TEST_TMPDIR/le_pub.bin" -a n \
         -c "$TEST_TMPDIR/le_ext.ctx" 2>/dev/null &&
     [ -s "$TEST_TMPDIR/le_ext.ctx" ]

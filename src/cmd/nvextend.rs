@@ -8,7 +8,7 @@ use log::info;
 use tss_esapi::tss2_esys::*;
 
 use crate::cli::GlobalOpts;
-use crate::parse;
+use crate::parse::{self, NvAuthEntity};
 use crate::raw_esys::RawEsysContext;
 
 /// Extend an NV index with additional data.
@@ -21,8 +21,8 @@ pub struct NvExtendCmd {
     pub nv_index: String,
 
     /// Authorization hierarchy (o/owner, p/platform) or "index"
-    #[arg(short = 'C', long = "hierarchy", default_value = "o")]
-    pub hierarchy: String,
+    #[arg(short = 'C', long = "hierarchy", default_value = "o", value_parser = parse::parse_nv_auth_entity)]
+    pub hierarchy: NvAuthEntity,
 
     /// Auth value
     #[arg(short = 'P', long = "auth")]
@@ -42,11 +42,7 @@ impl NvExtendCmd {
 
         let nv_handle = raw.tr_from_tpm_public(nv_index_val)?;
 
-        let auth_handle = match self.hierarchy.to_lowercase().as_str() {
-            "o" | "owner" => ESYS_TR_RH_OWNER,
-            "p" | "platform" => ESYS_TR_RH_PLATFORM,
-            _ => nv_handle,
-        };
+        let auth_handle = RawEsysContext::resolve_nv_auth_entity(self.hierarchy, nv_handle);
 
         if let Some(ref auth_str) = self.auth {
             let auth = parse::parse_auth(auth_str)?;

@@ -27,9 +27,9 @@ pub struct PolicyAuthorizeCmd {
     #[arg(short = 'i', long = "input")]
     pub input: PathBuf,
 
-    /// Policy reference (nonce) file (optional)
-    #[arg(short = 'q', long = "qualification")]
-    pub qualification: Option<PathBuf>,
+    /// Policy reference (digest) (hex:<hex_bytes> or file:<path>)
+    #[arg(short = 'q', long = "qualification", value_parser = crate::parse::parse_qualification)]
+    pub qualification: Option<crate::parse::Qualification>,
 
     /// Signing key name file
     #[arg(short = 'n', long = "name")]
@@ -59,11 +59,8 @@ impl PolicyAuthorizeCmd {
             .map_err(|e| anyhow::anyhow!("invalid approved policy: {e}"))?;
 
         let policy_ref = match &self.qualification {
-            Some(path) => {
-                let data = std::fs::read(path)
-                    .with_context(|| format!("reading policy ref from {}", path.display()))?;
-                Nonce::try_from(data).map_err(|e| anyhow::anyhow!("invalid policy ref: {e}"))?
-            }
+            Some(bytes) => Nonce::try_from(bytes.as_slice())
+                .map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?,
             None => Nonce::default(),
         };
 

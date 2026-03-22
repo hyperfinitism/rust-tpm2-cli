@@ -10,8 +10,7 @@ use tss_esapi::structures::{Data, SymmetricDefinitionObject};
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_object_from_source};
-use crate::parse;
-use crate::parse::parse_hex_u32;
+use crate::parse::{self, parse_context_source};
 use crate::session::execute_with_optional_session;
 
 /// Duplicate a loaded object for use in a different hierarchy.
@@ -19,28 +18,16 @@ use crate::session::execute_with_optional_session;
 /// Wraps TPM2_Duplicate.
 #[derive(Parser)]
 pub struct DuplicateCmd {
-    /// Object to duplicate (context file path)
-    #[arg(
-        short = 'c',
-        long = "object-context",
-        conflicts_with = "object_context_handle"
-    )]
-    pub object_context: Option<PathBuf>,
+    /// Object to duplicate (file:<path> or hex:<handle>)
+    #[arg(short = 'c', long = "object-context", value_parser = parse_context_source)]
+    pub object_context: ContextSource,
 
-    /// Object to duplicate (hex handle, e.g. 0x81000001)
-    #[arg(long = "object-context-handle", value_parser = parse_hex_u32, conflicts_with = "object_context")]
-    pub object_context_handle: Option<u32>,
-
-    /// New parent key context file path
-    #[arg(short = 'C', long = "parent-context", conflicts_with_all = ["parent_context_handle", "parent_context_null"])]
-    pub parent_context: Option<PathBuf>,
-
-    /// New parent key handle (hex, e.g. 0x81000001)
-    #[arg(long = "parent-context-handle", value_parser = parse_hex_u32, conflicts_with_all = ["parent_context", "parent_context_null"])]
-    pub parent_context_handle: Option<u32>,
+    /// New parent key context (file:<path> or hex:<handle>)
+    #[arg(short = 'C', long = "parent-context", value_parser = parse_context_source, conflicts_with = "parent_context_null")]
+    pub parent_context: Option<ContextSource>,
 
     /// Use a null parent handle
-    #[arg(long = "parent-context-null", conflicts_with_all = ["parent_context", "parent_context_handle"])]
+    #[arg(long = "parent-context-null", conflicts_with = "parent_context")]
     pub parent_context_null: bool,
 
     /// Auth value for the object
@@ -73,34 +60,17 @@ pub struct DuplicateCmd {
 }
 
 impl DuplicateCmd {
-    fn object_context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.object_context, self.object_context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!(
-                "exactly one of --object-context or --object-context-handle must be provided"
-            ),
-        }
-    }
-
-    fn parent_context_source(&self) -> anyhow::Result<ContextSource> {
-        match (&self.parent_context, self.parent_context_handle) {
-            (Some(path), None) => Ok(ContextSource::File(path.clone())),
-            (None, Some(handle)) => Ok(ContextSource::Handle(handle)),
-            _ => anyhow::bail!(
-                "exactly one of --parent-context or --parent-context-handle must be provided"
-            ),
-        }
-    }
-
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let object_handle = load_object_from_source(&mut ctx, &self.object_context_source()?)?;
+        let object_handle = load_object_from_source(&mut ctx, &self.object_context)?;
         let parent_handle = if self.parent_context_null {
             tss_esapi::handles::ObjectHandle::Null
         } else {
-            load_object_from_source(&mut ctx, &self.parent_context_source()?)?
+            match &self.parent_context {
+                Some(src) => load_object_from_source(&mut ctx, src)?,
+                None => anyhow::bail!("--parent-context or --parent-context-null is required"),
+            }
         };
 
         if let Some(ref auth_str) = self.auth {
