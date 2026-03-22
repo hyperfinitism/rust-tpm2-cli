@@ -76,7 +76,7 @@ run_test "rcdecode 0x100" tpm2 rcdecode 0x100
 # readpublic writes TPMT_PUBLIC (no size prefix), so use that type.
 run_test "print TPMT_PUBLIC" bash -c '
     tpm2 createprimary -c "$TEST_TMPDIR/primary.ctx" 2>/dev/null &&
-    tpm2 readpublic -c "$TEST_TMPDIR/primary.ctx" -o "$TEST_TMPDIR/pub.bin" 2>/dev/null &&
+    tpm2 readpublic -c "file:$TEST_TMPDIR/primary.ctx" -o "$TEST_TMPDIR/pub.bin" 2>/dev/null &&
     tpm2 print -t TPMT_PUBLIC "$TEST_TMPDIR/pub.bin" 2>/dev/null
 '
 run_test "print TPMS_CONTEXT" bash -c '
