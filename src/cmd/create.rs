@@ -10,8 +10,9 @@ use tss_esapi::interface_types::algorithm::PublicAlgorithm;
 use tss_esapi::interface_types::ecc::EccCurve;
 use tss_esapi::interface_types::key_bits::RsaKeyBits;
 use tss_esapi::structures::{
-    EccScheme, HashScheme, KeyDerivationFunctionScheme, Public, PublicBuilder,
-    PublicEccParametersBuilder, PublicRsaParametersBuilder, RsaExponent, RsaScheme,
+    Digest, EccScheme, HashScheme, KeyDerivationFunctionScheme, KeyedHashScheme, Public,
+    PublicBuilder, PublicEccParametersBuilder, PublicKeyedHashParameters,
+    PublicRsaParametersBuilder, RsaExponent, RsaScheme, SensitiveData,
 };
 use tss_esapi::traits::Marshall;
 
@@ -37,7 +38,7 @@ pub struct CreateCmd {
     #[arg(short = 'H', long = "parent-context-handle", value_parser = parse_hex_u32, conflicts_with = "parent_context")]
     pub parent_context_handle: Option<u32>,
 
-    /// Key algorithm (rsa, ecc)
+    /// Key algorithm (rsa, ecc, keyedhash, hmac)
     #[arg(short = 'G', long = "key-algorithm", default_value = "rsa")]
     pub algorithm: String,
 
@@ -61,6 +62,10 @@ pub struct CreateCmd {
     #[arg(long = "key-size", default_value = "2048")]
     pub key_size: u16,
 
+    /// Input file with data to seal (for keyedhash with null scheme)
+    #[arg(short = 'i', long = "seal-data")]
+    pub seal_data: Option<PathBuf>,
+
     /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
     pub session: Option<PathBuf>,
@@ -82,10 +87,23 @@ impl CreateCmd {
 
         let parent_handle = load_key_from_source(&mut ctx, &self.parent_context_source()?)?;
         let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
-        let public = build_signing_public(&self.algorithm, hash_alg, self.key_size)?;
+        let public = build_child_public(&self.algorithm, hash_alg, self.key_size)?;
 
         let auth = match &self.auth {
             Some(a) => Some(parse::parse_auth(a)?),
+            None => None,
+        };
+
+        // If seal data is provided, read it.
+        let sensitive_data = match &self.seal_data {
+            Some(path) => {
+                let data = std::fs::read(path)
+                    .with_context(|| format!("reading seal data from {}", path.display()))?;
+                Some(
+                    SensitiveData::try_from(data)
+                        .map_err(|e| anyhow::anyhow!("seal data too large: {e}"))?,
+                )
+            }
             None => None,
         };
 
@@ -95,7 +113,7 @@ impl CreateCmd {
                 parent_handle,
                 public.clone(),
                 auth.clone(),
-                None,
+                sensitive_data.clone(),
                 None,
                 None,
             )
@@ -123,8 +141,21 @@ impl CreateCmd {
     }
 }
 
-fn build_signing_public(
+fn build_child_public(
     alg: &str,
+    hash_alg: tss_esapi::interface_types::algorithm::HashingAlgorithm,
+    key_size: u16,
+) -> anyhow::Result<Public> {
+    match alg.to_lowercase().as_str() {
+        "rsa" => build_rsa_signing_public(hash_alg, key_size),
+        "ecc" => build_ecc_signing_public(hash_alg),
+        "hmac" => build_hmac_public(hash_alg),
+        "keyedhash" => build_sealed_public(hash_alg),
+        _ => bail!("unsupported key algorithm: {alg} (supported: rsa, ecc, hmac, keyedhash)"),
+    }
+}
+
+fn build_rsa_signing_public(
     hash_alg: tss_esapi::interface_types::algorithm::HashingAlgorithm,
     key_size: u16,
 ) -> anyhow::Result<Public> {
@@ -137,50 +168,107 @@ fn build_signing_public(
         .build()
         .context("failed to build object attributes")?;
 
-    let builder = PublicBuilder::new()
+    let bits = match key_size {
+        1024 => RsaKeyBits::Rsa1024,
+        2048 => RsaKeyBits::Rsa2048,
+        3072 => RsaKeyBits::Rsa3072,
+        4096 => RsaKeyBits::Rsa4096,
+        _ => bail!("unsupported RSA key size: {key_size}"),
+    };
+    let params = PublicRsaParametersBuilder::new()
+        .with_scheme(RsaScheme::RsaSsa(HashScheme::new(hash_alg)))
+        .with_key_bits(bits)
+        .with_exponent(RsaExponent::default())
+        .with_is_signing_key(true)
+        .build()
+        .context("failed to build RSA parameters")?;
+
+    PublicBuilder::new()
         .with_name_hashing_algorithm(hash_alg)
-        .with_object_attributes(attributes);
+        .with_object_attributes(attributes)
+        .with_public_algorithm(PublicAlgorithm::Rsa)
+        .with_rsa_parameters(params)
+        .with_rsa_unique_identifier(Default::default())
+        .build()
+        .context("failed to build RSA public")
+}
 
-    match alg.to_lowercase().as_str() {
-        "rsa" => {
-            let bits = match key_size {
-                1024 => RsaKeyBits::Rsa1024,
-                2048 => RsaKeyBits::Rsa2048,
-                3072 => RsaKeyBits::Rsa3072,
-                4096 => RsaKeyBits::Rsa4096,
-                _ => bail!("unsupported RSA key size: {key_size}"),
-            };
-            let params = PublicRsaParametersBuilder::new()
-                .with_scheme(RsaScheme::RsaSsa(HashScheme::new(hash_alg)))
-                .with_key_bits(bits)
-                .with_exponent(RsaExponent::default())
-                .with_is_signing_key(true)
-                .build()
-                .context("failed to build RSA parameters")?;
+fn build_ecc_signing_public(
+    hash_alg: tss_esapi::interface_types::algorithm::HashingAlgorithm,
+) -> anyhow::Result<Public> {
+    let attributes = ObjectAttributesBuilder::new()
+        .with_fixed_tpm(true)
+        .with_fixed_parent(true)
+        .with_sensitive_data_origin(true)
+        .with_user_with_auth(true)
+        .with_sign_encrypt(true)
+        .build()
+        .context("failed to build object attributes")?;
 
-            builder
-                .with_public_algorithm(PublicAlgorithm::Rsa)
-                .with_rsa_parameters(params)
-                .with_rsa_unique_identifier(Default::default())
-                .build()
-                .context("failed to build RSA public")
-        }
-        "ecc" => {
-            let params = PublicEccParametersBuilder::new()
-                .with_ecc_scheme(EccScheme::EcDsa(HashScheme::new(hash_alg)))
-                .with_curve(EccCurve::NistP256)
-                .with_is_signing_key(true)
-                .with_key_derivation_function_scheme(KeyDerivationFunctionScheme::Null)
-                .build()
-                .context("failed to build ECC parameters")?;
+    let params = PublicEccParametersBuilder::new()
+        .with_ecc_scheme(EccScheme::EcDsa(HashScheme::new(hash_alg)))
+        .with_curve(EccCurve::NistP256)
+        .with_is_signing_key(true)
+        .with_key_derivation_function_scheme(KeyDerivationFunctionScheme::Null)
+        .build()
+        .context("failed to build ECC parameters")?;
 
-            builder
-                .with_public_algorithm(PublicAlgorithm::Ecc)
-                .with_ecc_parameters(params)
-                .with_ecc_unique_identifier(Default::default())
-                .build()
-                .context("failed to build ECC public")
-        }
-        _ => bail!("unsupported key algorithm: {alg}"),
-    }
+    PublicBuilder::new()
+        .with_name_hashing_algorithm(hash_alg)
+        .with_object_attributes(attributes)
+        .with_public_algorithm(PublicAlgorithm::Ecc)
+        .with_ecc_parameters(params)
+        .with_ecc_unique_identifier(Default::default())
+        .build()
+        .context("failed to build ECC public")
+}
+
+fn build_hmac_public(
+    hash_alg: tss_esapi::interface_types::algorithm::HashingAlgorithm,
+) -> anyhow::Result<Public> {
+    let attributes = ObjectAttributesBuilder::new()
+        .with_fixed_tpm(true)
+        .with_fixed_parent(true)
+        .with_sensitive_data_origin(true)
+        .with_user_with_auth(true)
+        .with_sign_encrypt(true)
+        .build()
+        .context("failed to build object attributes")?;
+
+    let params = PublicKeyedHashParameters::new(KeyedHashScheme::Hmac {
+        hmac_scheme: HashScheme::new(hash_alg).into(),
+    });
+
+    PublicBuilder::new()
+        .with_name_hashing_algorithm(hash_alg)
+        .with_object_attributes(attributes)
+        .with_public_algorithm(PublicAlgorithm::KeyedHash)
+        .with_keyed_hash_parameters(params)
+        .with_keyed_hash_unique_identifier(Digest::default())
+        .build()
+        .context("failed to build HMAC key public")
+}
+
+fn build_sealed_public(
+    hash_alg: tss_esapi::interface_types::algorithm::HashingAlgorithm,
+) -> anyhow::Result<Public> {
+    // Sealed data objects use KeyedHash with a Null scheme and no
+    // sign_encrypt or sensitive_data_origin attributes.
+    let attributes = ObjectAttributesBuilder::new()
+        .with_fixed_tpm(true)
+        .with_fixed_parent(true)
+        .with_user_with_auth(true)
+        .build()
+        .context("failed to build object attributes")?;
+
+    let params = PublicKeyedHashParameters::new(KeyedHashScheme::Null);
+
+    PublicBuilder::new()
+        .with_name_hashing_algorithm(hash_alg)
+        .with_object_attributes(attributes)
+        .with_public_algorithm(PublicAlgorithm::KeyedHash)
+        .with_keyed_hash_parameters(params)
+        .with_keyed_hash_unique_identifier(Digest::default())
+        .build()
+        .context("failed to build sealed data public")
 }
