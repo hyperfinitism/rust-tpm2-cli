@@ -34,8 +34,12 @@ impl PcrEventCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
 
-        // Resolve PCR handle.
-        let pcr_handle = raw.tr_from_tpm_public(self.pcr_index as u32)?;
+        let pcr_tpm_handle: u32 = self.pcr_index as u32;
+        let pcr_handle: ESYS_TR = if pcr_tpm_handle < TPM2_MAX_PCRS {
+            pcr_tpm_handle
+        } else {
+            raw.tr_from_tpm_public(pcr_tpm_handle)?
+        };
 
         if let Some(ref auth_str) = self.auth {
             let auth = parse::parse_auth(auth_str)?;
