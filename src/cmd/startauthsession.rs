@@ -29,15 +29,15 @@ pub struct StartAuthSessionCmd {
     pub hash_algorithm: String,
 
     /// Start a policy session (instead of the default trial session)
-    #[arg(long = "policy-session", conflicts_with_all = ["hmac-session", "audit-session"])]
+    #[arg(long = "policy-session", conflicts_with_all = ["hmac_session", "audit_session"])]
     pub policy_session: bool,
 
     /// Start an HMAC session
-    #[arg(long = "hmac-session", conflicts_with_all = ["policy-session", "audit-session"])]
+    #[arg(long = "hmac-session", conflicts_with_all = ["policy_session", "audit_session"])]
     pub hmac_session: bool,
 
     /// Start an audit session (HMAC with audit flag)
-    #[arg(long = "audit-session", conflicts_with_all = ["policy-session", "hmac-session"])]
+    #[arg(long = "audit-session", conflicts_with_all = ["policy_session", "hmac_session"])]
     pub audit_session: bool,
 }
 

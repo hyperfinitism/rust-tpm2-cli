@@ -46,17 +46,11 @@ pub struct VerifySignatureCmd {
     pub hash_algorithm: Option<String>,
 
     /// File containing the message that was signed
-    #[arg(
-        short = 'm',
-        long = "message",
-        conflicts_with = "digest",
-        requires = "hash-algorithm",
-        conflicts_with = "digest"
-    )]
+    #[arg(short = 'm', long = "message", conflicts_with = "digest")]
     pub message: Option<PathBuf>,
 
     /// File containing the digest that was signed
-    #[arg(short = 'd', long = "digest", conflicts_with_all = ["message", "hash-algorithm"])]
+    #[arg(short = 'd', long = "digest", conflicts_with_all = ["message", "hash_algorithm"])]
     pub digest: Option<PathBuf>,
 
     /// File containing the signature to verify (raw TPM marshaled binary)
