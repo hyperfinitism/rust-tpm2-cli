@@ -8,7 +8,7 @@ use log::info;
 use tss_esapi::handles::NvIndexTpmHandle;
 use tss_esapi::structures::NvPublicBuilder;
 
-use tss_esapi::interface_types::resource_handles::Provision;
+use tss_esapi::interface_types::reserved_handles::Provision;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;

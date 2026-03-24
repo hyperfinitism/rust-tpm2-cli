@@ -65,7 +65,7 @@ impl QuoteCmd {
         let pcr_selection = parse::parse_pcr_selection(&self.pcr_list)?;
 
         let qualifying_data = match &self.qualification {
-            Some(bytes) => Data::try_from(bytes.as_slice())
+            Some(bytes) => Data::try_from(bytes.as_slice().to_vec())
                 .map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?,
             None => Data::default(),
         };
@@ -102,7 +102,7 @@ impl QuoteCmd {
             let mut raw = Vec::new();
             for (_, digests) in &chunks {
                 for digest in digests.value() {
-                    raw.extend_from_slice(digest.value());
+                    raw.extend_from_slice(digest.as_bytes());
                 }
             }
             std::fs::write(path, &raw)

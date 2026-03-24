@@ -14,7 +14,7 @@ use tss_esapi::structures::{
     PublicRsaParametersBuilder, RsaExponent, RsaScheme, SymmetricDefinitionObject,
 };
 
-use tss_esapi::interface_types::resource_handles::Hierarchy;
+use tss_esapi::interface_types::reserved_handles::Hierarchy;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -48,6 +48,18 @@ pub struct CreatePrimaryCmd {
     #[arg(long = "key-size", default_value = "2048")]
     pub key_size: u16,
 
+    /// ECC curve (nistp256, nistp384, nistp521, sm2p256, etc.)
+    #[arg(long = "ecc-curve", default_value = "nistp256")]
+    pub ecc_curve: String,
+
+    /// Outside info data (hex:<hex> or file:<path>)
+    #[arg(short = 'q', long = "outside-info")]
+    pub outside_info: Option<String>,
+
+    /// Creation PCR selection (e.g. sha256:0,1,2)
+    #[arg(short = 'l', long = "creation-pcr")]
+    pub creation_pcr: Option<String>,
+
     /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
     pub session: Option<PathBuf>,
@@ -58,10 +70,21 @@ impl CreatePrimaryCmd {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
         let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
-        let public = build_public(&self.algorithm, hash_alg, self.key_size)?;
+        let ecc_curve = parse::parse_ecc_curve(&self.ecc_curve)?;
+        let public = build_public(&self.algorithm, hash_alg, self.key_size, ecc_curve)?;
 
         let auth = match &self.auth {
             Some(a) => Some(parse::parse_auth(a)?),
+            None => None,
+        };
+
+        let outside_info = match &self.outside_info {
+            Some(s) => Some(parse::parse_data(s)?),
+            None => None,
+        };
+
+        let creation_pcr = match &self.creation_pcr {
+            Some(s) => Some(parse::parse_pcr_selection(s)?),
             None => None,
         };
 
@@ -71,9 +94,9 @@ impl CreatePrimaryCmd {
                 self.hierarchy,
                 public.clone(),
                 auth.clone(),
-                None,
-                None,
-                None,
+                None, // initial_data
+                outside_info.clone(),
+                creation_pcr.clone(),
             )
         })
         .context("TPM2_CreatePrimary failed")?;
@@ -98,6 +121,7 @@ fn build_public(
     alg: &str,
     hash_alg: tss_esapi::interface_types::algorithm::HashingAlgorithm,
     key_size: u16,
+    ecc_curve: EccCurve,
 ) -> anyhow::Result<Public> {
     let attributes = ObjectAttributesBuilder::new()
         .with_fixed_tpm(true)
@@ -142,7 +166,7 @@ fn build_public(
         "ecc" => {
             let params = PublicEccParametersBuilder::new()
                 .with_ecc_scheme(EccScheme::Null)
-                .with_curve(EccCurve::NistP256)
+                .with_curve(ecc_curve)
                 .with_is_decryption_key(true)
                 .with_restricted(true)
                 .with_symmetric(SymmetricDefinitionObject::AES_128_CFB)

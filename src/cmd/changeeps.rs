@@ -24,7 +24,7 @@ impl ChangeEpsCmd {
 
         if let Some(ref auth_str) = self.auth {
             let auth = parse::parse_auth(auth_str)?;
-            raw.set_auth(ESYS_TR_RH_PLATFORM, auth.value())?;
+            raw.set_auth(ESYS_TR_RH_PLATFORM, auth.as_bytes())?;
         }
 
         unsafe {

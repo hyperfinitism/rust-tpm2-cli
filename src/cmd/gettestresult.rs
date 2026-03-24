@@ -27,8 +27,8 @@ impl GetTestResultCmd {
         };
 
         println!("status: {status}");
-        if !data.value().is_empty() {
-            println!("data: {}", hex::encode(data.value()));
+        if !data.as_bytes().is_empty() {
+            println!("data: {}", hex::encode(data.as_bytes()));
         }
 
         Ok(())

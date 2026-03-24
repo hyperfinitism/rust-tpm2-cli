@@ -70,7 +70,7 @@ impl GetTimeCmd {
         }
 
         let qualifying_data = match &self.qualification {
-            Some(bytes) => Data::try_from(bytes.as_slice())
+            Some(bytes) => Data::try_from(bytes.as_slice().to_vec())
                 .map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?,
             None => Data::default(),
         };

@@ -8,7 +8,7 @@ use log::info;
 use tss_esapi::constants::CapabilityType;
 use tss_esapi::handles::ObjectHandle;
 use tss_esapi::structures::CapabilityData;
-use tss_esapi::utils::TpmsContext;
+use tss_esapi::structures::SavedTpmContext;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -75,7 +75,7 @@ impl FlushContextCmd {
 
         let data = std::fs::read(path)
             .with_context(|| format!("reading context file: {}", path.display()))?;
-        let saved: TpmsContext =
+        let saved: SavedTpmContext =
             serde_json::from_slice(&data).context("failed to deserialize context")?;
         let obj_handle = ctx.context_load(saved).context("context_load failed")?;
         ctx.flush_context(obj_handle)

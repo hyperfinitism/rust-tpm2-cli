@@ -43,7 +43,7 @@ impl PcrEventCmd {
 
         if let Some(ref auth_str) = self.auth {
             let auth = parse::parse_auth(auth_str)?;
-            raw.set_auth(pcr_handle, auth.value())?;
+            raw.set_auth(pcr_handle, auth.as_bytes())?;
         }
 
         let data = std::fs::read(&self.input)

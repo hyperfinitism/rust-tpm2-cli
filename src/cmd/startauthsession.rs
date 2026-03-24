@@ -8,11 +8,11 @@ use log::info;
 use tss_esapi::attributes::SessionAttributesBuilder;
 use tss_esapi::constants::SessionType;
 use tss_esapi::handles::SessionHandle;
-use tss_esapi::structures::SymmetricDefinition;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
-use crate::parse;
+use crate::handle::{ContextSource, load_object_from_source};
+use crate::parse::{self, parse_context_source};
 
 /// Start a TPM authorization session and save the session context to a file.
 ///
@@ -39,6 +39,22 @@ pub struct StartAuthSessionCmd {
     /// Start an audit session (HMAC with audit flag)
     #[arg(long = "audit-session", conflicts_with_all = ["policy_session", "hmac_session"])]
     pub audit_session: bool,
+
+    /// Symmetric algorithm for session encryption (aes128cfb, aes256cfb, xor, null)
+    #[arg(long = "symmetric", default_value = "aes128cfb")]
+    pub symmetric: String,
+
+    /// Bind the session to a loaded object (file:<path> or hex:<handle>)
+    #[arg(long = "bind", value_parser = parse_context_source)]
+    pub bind: Option<ContextSource>,
+
+    /// Enable parameter encryption (encrypt flag on session)
+    #[arg(long = "enable-encrypt")]
+    pub enable_encrypt: bool,
+
+    /// Enable parameter decryption (decrypt flag on session)
+    #[arg(long = "enable-decrypt")]
+    pub enable_decrypt: bool,
 }
 
 impl StartAuthSessionCmd {
@@ -47,24 +63,33 @@ impl StartAuthSessionCmd {
 
         let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
         let session_type = self.resolve_session_type();
+        let symmetric = parse::parse_symmetric_definition(&self.symmetric)?;
+
+        let bind_handle = match &self.bind {
+            Some(src) => Some(load_object_from_source(&mut ctx, src)?),
+            None => None,
+        };
 
         let session = ctx
-            .start_auth_session(
-                None,
-                None,
-                None,
-                session_type,
-                SymmetricDefinition::AES_128_CFB,
-                hash_alg,
-            )
+            .start_auth_session(None, bind_handle, None, session_type, symmetric, hash_alg)
             .context("TPM2_StartAuthSession failed")?
             .ok_or_else(|| anyhow::anyhow!("no session returned"))?;
 
-        // Set the audit attribute if --audit-session was requested.
-        if self.audit_session {
-            let (attrs, mask) = SessionAttributesBuilder::new().with_audit(true).build();
+        // Set session attributes if requested.
+        if self.audit_session || self.enable_encrypt || self.enable_decrypt {
+            let mut builder = SessionAttributesBuilder::new();
+            if self.audit_session {
+                builder = builder.with_audit(true);
+            }
+            if self.enable_encrypt {
+                builder = builder.with_encrypt(true);
+            }
+            if self.enable_decrypt {
+                builder = builder.with_decrypt(true);
+            }
+            let (attrs, mask) = builder.build();
             ctx.tr_sess_set_attributes(session, attrs, mask)
-                .context("failed to set audit attribute on session")?;
+                .context("failed to set session attributes")?;
         }
 
         // Save the session context to file.

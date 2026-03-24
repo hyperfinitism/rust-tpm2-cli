@@ -51,8 +51,8 @@ impl LoadCmd {
         let pub_bytes = std::fs::read(&self.public)
             .with_context(|| format!("reading public file: {}", self.public.display()))?;
 
-        let private = Private::try_from(priv_bytes.as_slice())
-            .map_err(|e| anyhow::anyhow!("invalid private: {e}"))?;
+        let private =
+            Private::try_from(priv_bytes).map_err(|e| anyhow::anyhow!("invalid private: {e}"))?;
         let pub_buffer = PublicBuffer::try_from(pub_bytes)
             .map_err(|e| anyhow::anyhow!("invalid public buffer: {e}"))?;
         let public = tss_esapi::structures::Public::try_from(pub_buffer)

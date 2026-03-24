@@ -94,7 +94,7 @@ impl EncryptDecryptCmd {
         })
         .context("TPM2_EncryptDecrypt2 failed")?;
 
-        output::write_to_file(&self.output, out_data.value())?;
+        output::write_to_file(&self.output, out_data.as_bytes())?;
         info!(
             "{} data saved to {}",
             if self.decrypt {
@@ -106,7 +106,7 @@ impl EncryptDecryptCmd {
         );
 
         if let Some(ref path) = self.iv_out {
-            output::write_to_file(path, iv_out.value())?;
+            output::write_to_file(path, iv_out.as_bytes())?;
             info!("IV out saved to {}", path.display());
         }
 

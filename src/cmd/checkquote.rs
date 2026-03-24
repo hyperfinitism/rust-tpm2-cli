@@ -70,7 +70,7 @@ impl CheckQuoteCmd {
                 ctx.hash(
                     buffer,
                     hash_alg,
-                    tss_esapi::interface_types::resource_handles::Hierarchy::Owner,
+                    tss_esapi::interface_types::reserved_handles::Hierarchy::Owner,
                 )
             })
             .context("TPM2_Hash failed")?;
@@ -108,10 +108,10 @@ impl CheckQuoteCmd {
         // 4. Check qualification (extraData / nonce)
         // ---------------------------------------------------------------
         if let Some(ref expected) = self.qualification {
-            if attest.extra_data().value() != expected.as_slice() {
+            if attest.extra_data().as_bytes() != expected.as_slice() {
                 bail!(
                     "qualification mismatch: quote contains {:?}, expected {:?}",
-                    hex::encode(attest.extra_data().value()),
+                    hex::encode(attest.extra_data().as_bytes()),
                     hex::encode(expected.as_slice())
                 );
             }
@@ -135,17 +135,17 @@ impl CheckQuoteCmd {
                     ctx.hash(
                         pcr_buf,
                         hash_alg,
-                        tss_esapi::interface_types::resource_handles::Hierarchy::Owner,
+                        tss_esapi::interface_types::reserved_handles::Hierarchy::Owner,
                     )
                 })
                 .context("TPM2_Hash of PCR values failed")?;
 
             let expected_pcr_digest = quote_info.pcr_digest();
-            if pcr_digest.value() != expected_pcr_digest.value() {
+            if pcr_digest.as_bytes() != expected_pcr_digest.as_bytes() {
                 bail!(
                     "PCR digest mismatch: computed {}, quote contains {}",
-                    hex::encode(pcr_digest.value()),
-                    hex::encode(expected_pcr_digest.value())
+                    hex::encode(pcr_digest.as_bytes()),
+                    hex::encode(expected_pcr_digest.as_bytes())
                 );
             }
             info!("PCR digest check: OK");

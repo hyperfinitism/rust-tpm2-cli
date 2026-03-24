@@ -110,7 +110,7 @@ impl ImportCmd {
         })
         .context("TPM2_Import failed")?;
 
-        let out_bytes = imported_private.value();
+        let out_bytes = imported_private.as_bytes();
         std::fs::write(&self.output, out_bytes)
             .with_context(|| format!("writing output to {}", self.output.display()))?;
         info!("imported private saved to {}", self.output.display());

@@ -70,10 +70,10 @@ impl HmacCmd {
         .context("TPM2_HMAC failed")?;
 
         if let Some(ref path) = self.output {
-            output::write_to_file(path, digest.value())?;
+            output::write_to_file(path, digest.as_bytes())?;
             info!("HMAC digest saved to {}", path.display());
         } else {
-            output::print_hex(digest.value());
+            output::print_hex(digest.as_bytes());
         }
 
         Ok(())

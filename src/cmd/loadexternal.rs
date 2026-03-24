@@ -8,7 +8,7 @@ use log::info;
 use tss_esapi::structures::{Public, Sensitive};
 use tss_esapi::traits::UnMarshall;
 
-use tss_esapi::interface_types::resource_handles::Hierarchy;
+use tss_esapi::interface_types::reserved_handles::Hierarchy;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -79,10 +79,10 @@ impl LoadExternalCmd {
         &self,
         ctx: &mut tss_esapi::Context,
         public: Public,
-        hierarchy: tss_esapi::interface_types::resource_handles::Hierarchy,
+        hierarchy: tss_esapi::interface_types::reserved_handles::Hierarchy,
     ) -> anyhow::Result<()> {
         let key_handle = ctx
-            .execute_without_session(|ctx| ctx.load_external_public(public, hierarchy))
+            .execute_without_session(|ctx| ctx.load_external(None, public, hierarchy))
             .context("TPM2_LoadExternal (public only) failed")?;
 
         self.save_context(ctx, key_handle.into())?;

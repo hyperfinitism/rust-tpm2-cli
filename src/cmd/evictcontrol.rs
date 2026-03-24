@@ -6,9 +6,9 @@ use anyhow::Context;
 use clap::Parser;
 use log::info;
 use tss_esapi::handles::PersistentTpmHandle;
-use tss_esapi::interface_types::dynamic_handles::Persistent;
+use tss_esapi::interface_types::data_handles::Persistent;
 
-use tss_esapi::interface_types::resource_handles::Provision;
+use tss_esapi::interface_types::reserved_handles::Provision;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;

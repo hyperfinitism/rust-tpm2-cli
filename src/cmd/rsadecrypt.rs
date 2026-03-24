@@ -85,7 +85,7 @@ impl RsaDecryptCmd {
         })
         .context("TPM2_RSA_Decrypt failed")?;
 
-        output::write_to_file(&self.output, plaintext.value())?;
+        output::write_to_file(&self.output, plaintext.as_bytes())?;
         info!("plaintext saved to {}", self.output.display());
         Ok(())
     }

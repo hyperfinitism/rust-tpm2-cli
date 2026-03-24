@@ -49,7 +49,7 @@ impl PcrReadCmd {
                 let selected: Vec<PcrSlot> = sel.selected().into_iter().collect();
                 for slot in &selected {
                     if idx < digests.value().len() {
-                        let digest = digests.value()[idx].value();
+                        let digest = digests.value()[idx].as_bytes();
                         let pcr_num = parse::pcr_slot_to_index(*slot);
                         println!("  {alg:?}:");
                         println!("    {pcr_num} : 0x{}", hex::encode(digest));

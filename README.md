@@ -18,9 +18,14 @@ The `rust-tpm2-cli` crate provides a suite of Rust-based command-line tools for 
 ### Install dependencies
 
 ```bash
+# Dependencies for tpm2-tss v4.1.3
 sudo apt update
-sudo apt install -y build-essential clang libtss2-dev pkg-config
+sudo apt install -y \
+  autoconf-archive autoconf autoconf-archive automake build-essential doxygen pkg-config \
+  libtool libcmocka0 libcmocka-dev libcurl4-openssl-dev libftdi-dev libini-config-dev \
+  libjson-c-dev libltdl-dev libssl-dev libusb-1.0-0-dev uthash-dev uuid-dev
 
+# Rust toolchain
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 ```
@@ -30,7 +35,7 @@ source "$HOME/.cargo/env"
 ```bash
 git clone https://github.com/hyperfinitism/rust-tpm2-cli
 cd rust-tpm2-cli
-cargo build -r
+TSS2_ESYS_STATIC=1 TSS2_SYS_STATIC=1 TSS2_MU_STATIC=1 TSS2_TCTILDR_STATIC=1 cargo build --release
 # => ./target/release/tpm2
 ```
 
@@ -258,19 +263,19 @@ tpm2 nvundefine 0x01400002 -C o
 ```bash
 # Read PCR bank
 tpm2 pcrread sha1:0,1,2+sha256:all
-tpm2 pcrread sha256:23 -o pcr23.bin
+tpm2 pcrread sha256:16 -o pcr16.bin
 
-# Extend PCR 23
+# Extend PCR 16
 echo "hello world" > message.dat
 tpm2 hash message.dat -g sha256 -o digest.bin
 DIGEST_HEX=$(xxd -p digest.bin | tr -d '\n')
 
-tpm2 pcrextend 23:sha256=${DIGEST_HEX}
-tpm2 pcrread sha256:23
-# == cat pcr23.bin digest.bin | sha256sum
+tpm2 pcrextend 16:sha256=${DIGEST_HEX}
+tpm2 pcrread sha256:16
+# == cat pcr16.bin digest.bin | sha256sum
 
-# Reset PCR 23
-tpm2 pcrreset 23
+# Reset PCR 16
+tpm2 pcrreset 16
 ```
 
 ## Comparison with tpm2-tools

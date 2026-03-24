@@ -90,7 +90,7 @@ impl ChangeAuthCmd {
             .context("TPM2_ObjectChangeAuth failed")?;
 
             if let Some(ref path) = self.output {
-                std::fs::write(path, new_private.value())
+                std::fs::write(path, new_private.as_bytes())
                     .with_context(|| format!("writing output to {}", path.display()))?;
                 info!("new private saved to {}", path.display());
             }

@@ -7,7 +7,7 @@ use clap::Parser;
 use log::info;
 use tss_esapi::constants::SessionType;
 use tss_esapi::handles::ObjectHandle;
-use tss_esapi::interface_types::resource_handles::HierarchyAuth;
+use tss_esapi::interface_types::reserved_handles::HierarchyAuth;
 use tss_esapi::interface_types::session_handles::AuthSession;
 use tss_esapi::structures::{EncryptedSecret, IdObject};
 
@@ -113,7 +113,7 @@ impl ActivateCredentialCmd {
         }
 
         // Write decrypted secret.
-        std::fs::write(&self.certinfo_data, cert_info.value())
+        std::fs::write(&self.certinfo_data, cert_info.as_bytes())
             .with_context(|| format!("writing certinfo to {}", self.certinfo_data.display()))?;
         info!("certinfo saved to {}", self.certinfo_data.display());
 

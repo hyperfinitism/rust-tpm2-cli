@@ -57,7 +57,7 @@ impl Zgen2PhaseCmd {
 
         if let Some(ref auth_str) = self.auth {
             let auth = parse::parse_auth(auth_str)?;
-            raw.set_auth(key_handle, auth.value())?;
+            raw.set_auth(key_handle, auth.as_bytes())?;
         }
 
         let static_data = std::fs::read(&self.static_public)?;

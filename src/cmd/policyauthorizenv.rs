@@ -47,7 +47,7 @@ impl PolicyAuthorizeNvCmd {
 
         if let Some(ref auth_str) = self.auth {
             let a = parse::parse_auth(auth_str)?;
-            raw.set_auth(auth_handle, a.value())?;
+            raw.set_auth(auth_handle, a.as_bytes())?;
         }
 
         unsafe {
