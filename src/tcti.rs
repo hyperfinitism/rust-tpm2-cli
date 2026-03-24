@@ -17,9 +17,7 @@ pub(crate) const DEFAULT_DEVICE_PATH: &str = "/dev/tpm0";
 /// Resolution order:
 /// 1. Explicit `tcti` argument
 /// 2. `RUST_TPM2_CLI_TCTI` environment variable
-/// 3. `TPM2TOOLS_TCTI` environment variable (tpm2-tools compat)
-/// 4. `TCTI` environment variable
-/// 5. `device:/dev/tpm0` (default)
+/// 3. `device:/dev/tpm0` (default)
 ///
 /// tss-esapi 8.x supports:
 /// - `device:/dev/tpmrm0`
@@ -32,12 +30,10 @@ pub(crate) fn resolve_tcti_str(tcti: Option<&str>) -> String {
     if let Some(s) = tcti {
         return s.to_owned();
     }
-    for var in ["RUST_TPM2_CLI_TCTI", "TPM2TOOLS_TCTI", "TCTI"] {
-        if let Ok(val) = std::env::var(var)
-            && !val.is_empty()
-        {
-            return val;
-        }
+    if let Ok(val) = std::env::var("RUST_TPM2_CLI_TCTI")
+        && !val.is_empty()
+    {
+        return val;
     }
     DEFAULT_TCTI.to_owned()
 }

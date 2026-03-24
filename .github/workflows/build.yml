@@ -47,14 +47,8 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
           target: ${{ matrix.target }}
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            autoconf-archive autoconf autoconf-archive automake build-essential doxygen pkg-config \
-            libtool libcmocka0 libcmocka-dev libcurl4-openssl-dev libftdi-dev libini-config-dev \
-            libjson-c-dev libltdl-dev libssl-dev libusb-1.0-0-dev uthash-dev uuid-dev
-        # sudo apt-get install -y libtss2-dev pkg-config
+      - uses: ./.github/actions/install-tpm2-tss
+      # - run: sudo apt-get update && sudo apt-get install -y libtss2-dev pkg-config
       - name: Build
         env:
           TSS2_ESYS_STATIC: 1
