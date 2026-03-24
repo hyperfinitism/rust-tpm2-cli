@@ -77,7 +77,7 @@ impl NvReadCmd {
         })
         .context("TPM2_NV_Read failed")?;
 
-        let bytes = data.value();
+        let bytes = data.as_bytes();
 
         if let Some(ref path) = self.output {
             output::write_to_file(path, bytes)?;

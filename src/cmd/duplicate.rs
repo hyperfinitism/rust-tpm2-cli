@@ -105,16 +105,16 @@ impl DuplicateCmd {
             })
             .context("TPM2_Duplicate failed")?;
 
-        std::fs::write(&self.private_out, duplicate_private.value())
+        std::fs::write(&self.private_out, duplicate_private.as_bytes())
             .with_context(|| format!("writing private to {}", self.private_out.display()))?;
         info!("duplicate private saved to {}", self.private_out.display());
 
-        std::fs::write(&self.encrypted_seed, encrypted_secret.value())
+        std::fs::write(&self.encrypted_seed, encrypted_secret.as_bytes())
             .with_context(|| format!("writing seed to {}", self.encrypted_seed.display()))?;
         info!("encrypted seed saved to {}", self.encrypted_seed.display());
 
         if let Some(ref path) = self.encryption_key_out {
-            std::fs::write(path, enc_key.value())
+            std::fs::write(path, enc_key.as_bytes())
                 .with_context(|| format!("writing encryption key to {}", path.display()))?;
             info!("encryption key saved to {}", path.display());
         }

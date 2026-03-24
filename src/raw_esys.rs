@@ -13,7 +13,7 @@ use std::ptr::{null, null_mut};
 use anyhow::{Context, bail};
 use tss_esapi::tss2_esys::*;
 
-use crate::tcti::DEFAULT_TCTI;
+use crate::tcti::resolve_tcti_str;
 
 // -----------------------------------------------------------------------
 // Raw context helpers
@@ -27,10 +27,7 @@ pub(crate) struct RawEsysContext {
 impl RawEsysContext {
     /// Create a new raw ESYS context from a TCTI config string.
     pub(crate) fn new(tcti: Option<&str>) -> anyhow::Result<Self> {
-        let tcti_str = match tcti {
-            Some(s) => s.to_owned(),
-            None => std::env::var("RUST_TPM2_CLI_TCTI").unwrap_or_else(|_| DEFAULT_TCTI.to_owned()),
-        };
+        let tcti_str = resolve_tcti_str(tcti);
         let c_str = CString::new(tcti_str.as_str()).context("TCTI string contains NUL")?;
 
         unsafe {
@@ -107,11 +104,9 @@ impl RawEsysContext {
     /// Load a saved context (from JSON file) and return the ESYS_TR.
     pub(crate) fn context_load(&mut self, path: &str) -> anyhow::Result<ESYS_TR> {
         let data = std::fs::read(path).with_context(|| format!("reading context file: {path}"))?;
-        let saved: tss_esapi::utils::TpmsContext =
+        let saved: tss_esapi::structures::SavedTpmContext =
             serde_json::from_slice(&data).context("failed to deserialize context")?;
-        let tpms: TPMS_CONTEXT = saved
-            .try_into()
-            .map_err(|e| anyhow::anyhow!("TpmsContext conversion failed: {e:?}"))?;
+        let tpms: TPMS_CONTEXT = saved.into();
 
         unsafe {
             let mut handle: ESYS_TR = ESYS_TR_NONE;
@@ -158,9 +153,9 @@ impl RawEsysContext {
             }
             let saved = *saved_ptr;
             Esys_Free(saved_ptr as *mut _);
-            let tpms: tss_esapi::utils::TpmsContext = saved
+            let tpms: tss_esapi::structures::SavedTpmContext = saved
                 .try_into()
-                .map_err(|e| anyhow::anyhow!("TpmsContext conversion failed: {e:?}"))?;
+                .map_err(|e| anyhow::anyhow!("SavedTpmContext conversion failed: {e:?}"))?;
             let json = serde_json::to_string(&tpms)?;
             std::fs::write(path, json)
                 .with_context(|| format!("writing context to {}", path.display()))?;
@@ -206,10 +201,10 @@ pub fn commit(
         let auth_val = crate::parse::parse_auth(auth_str)?;
         unsafe {
             let mut tpm2b_auth = TPM2B_AUTH {
-                size: auth_val.value().len() as u16,
+                size: auth_val.as_bytes().len() as u16,
                 ..Default::default()
             };
-            tpm2b_auth.buffer[..auth_val.value().len()].copy_from_slice(auth_val.value());
+            tpm2b_auth.buffer[..auth_val.as_bytes().len()].copy_from_slice(auth_val.as_bytes());
             let rc = Esys_TR_SetAuth(raw.ptr(), sign_handle, &tpm2b_auth);
             if rc != 0 {
                 bail!("Esys_TR_SetAuth failed: 0x{rc:08x}");

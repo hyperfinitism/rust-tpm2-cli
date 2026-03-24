@@ -4,7 +4,7 @@ use anyhow::Context;
 use clap::Parser;
 use log::info;
 use tss_esapi::handles::NvIndexTpmHandle;
-use tss_esapi::interface_types::resource_handles::NvAuth;
+use tss_esapi::interface_types::reserved_handles::NvAuth;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;

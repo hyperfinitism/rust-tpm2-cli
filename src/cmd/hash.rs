@@ -9,7 +9,7 @@ use log::info;
 use tss_esapi::structures::MaxBuffer;
 use tss_esapi::tss2_esys::TPMT_TK_HASHCHECK;
 
-use tss_esapi::interface_types::resource_handles::Hierarchy;
+use tss_esapi::interface_types::reserved_handles::Hierarchy;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -59,7 +59,7 @@ impl HashCmd {
             .execute_without_session(|ctx| ctx.hash(buffer.clone(), alg, self.hierarchy))
             .context("TPM2_Hash failed")?;
 
-        let bytes = digest.value();
+        let bytes = digest.as_bytes();
 
         if let Some(ref path) = self.output {
             output::write_to_file(path, bytes)?;

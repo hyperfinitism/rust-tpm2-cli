@@ -50,7 +50,7 @@ impl UnsealCmd {
             execute_with_optional_session(&mut ctx, session_path, |ctx| ctx.unseal(obj_handle))
                 .context("TPM2_Unseal failed")?;
 
-        let bytes = sensitive.value();
+        let bytes = sensitive.as_bytes();
 
         if let Some(ref path) = self.output {
             output::write_to_file(path, bytes)?;

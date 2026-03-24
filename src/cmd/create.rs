@@ -53,9 +53,21 @@ pub struct CreateCmd {
     #[arg(long = "key-size", default_value = "2048")]
     pub key_size: u16,
 
+    /// ECC curve (nistp256, nistp384, nistp521, sm2p256, etc.)
+    #[arg(long = "ecc-curve", default_value = "nistp256")]
+    pub ecc_curve: String,
+
     /// Input file with data to seal (for keyedhash with null scheme)
     #[arg(short = 'i', long = "seal-data")]
     pub seal_data: Option<PathBuf>,
+
+    /// Outside info data (hex:<hex> or file:<path>)
+    #[arg(short = 'q', long = "outside-info")]
+    pub outside_info: Option<String>,
+
+    /// Creation PCR selection (e.g. sha256:0,1,2)
+    #[arg(short = 'l', long = "creation-pcr")]
+    pub creation_pcr: Option<String>,
 
     /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
@@ -68,7 +80,8 @@ impl CreateCmd {
 
         let parent_handle = load_key_from_source(&mut ctx, &self.parent_context)?;
         let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
-        let public = build_child_public(&self.algorithm, hash_alg, self.key_size)?;
+        let ecc_curve = parse::parse_ecc_curve(&self.ecc_curve)?;
+        let public = build_child_public(&self.algorithm, hash_alg, self.key_size, ecc_curve)?;
 
         let auth = match &self.auth {
             Some(a) => Some(parse::parse_auth(a)?),
@@ -88,6 +101,16 @@ impl CreateCmd {
             None => None,
         };
 
+        let outside_info = match &self.outside_info {
+            Some(s) => Some(parse::parse_data(s)?),
+            None => None,
+        };
+
+        let creation_pcr = match &self.creation_pcr {
+            Some(s) => Some(parse::parse_pcr_selection(s)?),
+            None => None,
+        };
+
         let session_path = self.session.as_deref();
         let result = execute_with_optional_session(&mut ctx, session_path, |ctx| {
             ctx.create(
@@ -95,8 +118,8 @@ impl CreateCmd {
                 public.clone(),
                 auth.clone(),
                 sensitive_data.clone(),
-                None,
-                None,
+                outside_info.clone(),
+                creation_pcr.clone(),
             )
         })
         .context("TPM2_Create failed")?;
@@ -104,7 +127,7 @@ impl CreateCmd {
         info!("key created successfully");
 
         if let Some(ref path) = self.private_out {
-            let bytes = result.out_private.value();
+            let bytes = result.out_private.as_bytes();
             std::fs::write(path, bytes)?;
             info!("private portion saved to {}", path.display());
         }
@@ -126,10 +149,11 @@ fn build_child_public(
     alg: &str,
     hash_alg: tss_esapi::interface_types::algorithm::HashingAlgorithm,
     key_size: u16,
+    ecc_curve: EccCurve,
 ) -> anyhow::Result<Public> {
     match alg.to_lowercase().as_str() {
         "rsa" => build_rsa_signing_public(hash_alg, key_size),
-        "ecc" => build_ecc_signing_public(hash_alg),
+        "ecc" => build_ecc_signing_public(hash_alg, ecc_curve),
         "hmac" => build_hmac_public(hash_alg),
         "keyedhash" => build_sealed_public(hash_alg),
         _ => bail!("unsupported key algorithm: {alg} (supported: rsa, ecc, hmac, keyedhash)"),
@@ -176,6 +200,7 @@ fn build_rsa_signing_public(
 
 fn build_ecc_signing_public(
     hash_alg: tss_esapi::interface_types::algorithm::HashingAlgorithm,
+    ecc_curve: EccCurve,
 ) -> anyhow::Result<Public> {
     let attributes = ObjectAttributesBuilder::new()
         .with_fixed_tpm(true)
@@ -188,7 +213,7 @@ fn build_ecc_signing_public(
 
     let params = PublicEccParametersBuilder::new()
         .with_ecc_scheme(EccScheme::EcDsa(HashScheme::new(hash_alg)))
-        .with_curve(EccCurve::NistP256)
+        .with_curve(ecc_curve)
         .with_is_signing_key(true)
         .with_key_derivation_function_scheme(KeyDerivationFunctionScheme::Null)
         .build()

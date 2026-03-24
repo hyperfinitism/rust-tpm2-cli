@@ -80,14 +80,14 @@ impl EncryptCmd {
         .context("TPM2_EncryptDecrypt2 (encrypt) failed")?;
 
         if let Some(ref path) = self.output {
-            output::write_to_file(path, ciphertext.value())?;
+            output::write_to_file(path, ciphertext.as_bytes())?;
             info!("ciphertext written to {}", path.display());
         } else {
-            output::write_binary_stdout(ciphertext.value())?;
+            output::write_binary_stdout(ciphertext.as_bytes())?;
         }
 
         if let Some(ref path) = self.iv_output {
-            output::write_to_file(path, iv_out.value())?;
+            output::write_to_file(path, iv_out.as_bytes())?;
             info!("IV written to {}", path.display());
         }
 

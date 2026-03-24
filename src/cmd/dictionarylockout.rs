@@ -44,7 +44,7 @@ impl DictionaryLockoutCmd {
 
         if let Some(ref auth_str) = self.auth {
             let auth = parse::parse_auth(auth_str)?;
-            raw.set_auth(ESYS_TR_RH_LOCKOUT, auth.value())?;
+            raw.set_auth(ESYS_TR_RH_LOCKOUT, auth.as_bytes())?;
         }
 
         if self.clear_lockout {

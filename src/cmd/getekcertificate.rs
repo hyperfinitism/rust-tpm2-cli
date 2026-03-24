@@ -6,7 +6,7 @@ use anyhow::{Context, bail};
 use clap::Parser;
 use log::info;
 use tss_esapi::handles::NvIndexTpmHandle;
-use tss_esapi::interface_types::resource_handles::NvAuth;
+use tss_esapi::interface_types::reserved_handles::NvAuth;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -98,7 +98,7 @@ impl GetEkCertificateCmd {
                 })
                 .with_context(|| format!("TPM2_NV_Read failed at offset {offset}"))?;
 
-            cert_data.extend_from_slice(data.value());
+            cert_data.extend_from_slice(data.as_bytes());
             offset += to_read;
         }
 

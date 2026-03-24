@@ -68,7 +68,7 @@ impl RsaEncryptCmd {
             .execute_without_session(|ctx| ctx.rsa_encrypt(key_handle, message, scheme, label_data))
             .context("TPM2_RSA_Encrypt failed")?;
 
-        output::write_to_file(&self.output, ciphertext.value())?;
+        output::write_to_file(&self.output, ciphertext.as_bytes())?;
         info!("ciphertext saved to {}", self.output.display());
         Ok(())
     }

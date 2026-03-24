@@ -75,6 +75,10 @@ tpm2_commands! {
     Clockrateadjust(cmd::clockrateadjust::ClockRateAdjustCmd),
     /// Perform the first part of an ECC anonymous signing operation
     Commit(cmd::commit::CommitCmd),
+    /// Load a previously saved context back into the TPM
+    Contextload(cmd::contextload::ContextLoadCmd),
+    /// Save a loaded object's context to a file
+    Contextsave(cmd::contextsave::ContextSaveCmd),
     /// Create a child key
     Create(cmd::create::CreateCmd),
     /// Create an attestation key (AK) under an EK
@@ -125,10 +129,14 @@ tpm2_commands! {
     Gettime(cmd::gettime::GetTimeCmd),
     /// Compute a hash using the TPM
     Hash(cmd::hash::HashCmd),
+    /// Start an incremental hash sequence
+    Hashsequencestart(cmd::hashsequencestart::HashSequenceStartCmd),
     /// Enable or disable TPM hierarchies
     Hierarchycontrol(cmd::hierarchycontrol::HierarchyControlCmd),
     /// Compute HMAC using a TPM key
     Hmac(cmd::tpmhmac::HmacCmd),
+    /// Start an incremental HMAC sequence
+    Hmacsequencestart(cmd::hmacsequencestart::HmacSequenceStartCmd),
     /// Import a wrapped key into the TPM
     Import(cmd::import::ImportCmd),
     /// Run incremental self-test on specified algorithms
@@ -227,6 +235,10 @@ tpm2_commands! {
     Selftest(cmd::selftest::SelfTestCmd),
     /// Send a raw TPM command
     Send(cmd::send::SendCmd),
+    /// Complete a hash or HMAC sequence and retrieve the result
+    Sequencecomplete(cmd::sequencecomplete::SequenceCompleteCmd),
+    /// Feed data into a hash or HMAC sequence
+    Sequenceupdate(cmd::sequenceupdate::SequenceUpdateCmd),
     /// Configure session attributes
     Sessionconfig(cmd::sessionconfig::SessionConfigCmd),
     /// Set the TPM clock

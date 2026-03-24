@@ -12,15 +12,39 @@ pub(crate) const DEFAULT_TCTI: &str = "device:/dev/tpm0";
 /// Default raw device path (used by `send`).
 pub(crate) const DEFAULT_DEVICE_PATH: &str = "/dev/tpm0";
 
-/// Parse a TCTI configuration string into a [`TctiNameConf`].
+/// Resolve the TCTI configuration string.
 ///
-/// If `tcti` is `None`, falls back to the `RUST_TPM2_CLI_TCTI` environment
-/// variable, then to `device:/dev/tpm0`.
+/// Resolution order:
+/// 1. Explicit `tcti` argument
+/// 2. `RUST_TPM2_CLI_TCTI` environment variable
+/// 3. `TPM2TOOLS_TCTI` environment variable (tpm2-tools compat)
+/// 4. `TCTI` environment variable
+/// 5. `device:/dev/tpm0` (default)
+///
+/// tss-esapi 8.x supports:
+/// - `device:/dev/tpmrm0`
+/// - `mssim:host=localhost,port=2321`
+/// - `swtpm:host=localhost,port=2321`  (TCP)
+/// - `swtpm:path=/tmp/swtpm-sock`      (Unix socket)
+/// - `libtpms:`
+/// - `tabrmd:`
+pub(crate) fn resolve_tcti_str(tcti: Option<&str>) -> String {
+    if let Some(s) = tcti {
+        return s.to_owned();
+    }
+    for var in ["RUST_TPM2_CLI_TCTI", "TPM2TOOLS_TCTI", "TCTI"] {
+        if let Ok(val) = std::env::var(var)
+            && !val.is_empty()
+        {
+            return val;
+        }
+    }
+    DEFAULT_TCTI.to_owned()
+}
+
+/// Parse a TCTI configuration string into a [`TctiNameConf`].
 pub fn parse_tcti(tcti: Option<&str>) -> Result<TctiNameConf, Tpm2Error> {
-    let tcti_str = match tcti {
-        Some(s) => s.to_owned(),
-        None => std::env::var("RUST_TPM2_CLI_TCTI").unwrap_or_else(|_| DEFAULT_TCTI.to_owned()),
-    };
+    let tcti_str = resolve_tcti_str(tcti);
     TctiNameConf::from_str(&tcti_str).map_err(|e| Tpm2Error::InvalidTcti(e.to_string()))
 }
 
@@ -28,10 +52,7 @@ pub fn parse_tcti(tcti: Option<&str>) -> Result<TctiNameConf, Tpm2Error> {
 ///
 /// Used by `send` to open the TPM device directly.
 pub(crate) fn extract_device_path(tcti: Option<&str>) -> String {
-    let tcti_str = match tcti {
-        Some(s) => s.to_owned(),
-        None => std::env::var("RUST_TPM2_CLI_TCTI").unwrap_or_else(|_| DEFAULT_TCTI.to_owned()),
-    };
+    let tcti_str = resolve_tcti_str(tcti);
     if let Some(rest) = tcti_str.strip_prefix("device:") {
         rest.to_owned()
     } else {

@@ -65,7 +65,7 @@ impl CertifyCreationCmd {
 
         if let Some(ref auth_str) = self.signing_auth {
             let auth = parse::parse_auth(auth_str)?;
-            raw.set_auth(sign_handle, auth.value())?;
+            raw.set_auth(sign_handle, auth.as_bytes())?;
         }
 
         let creation_hash_data = std::fs::read(&self.creation_hash).with_context(|| {
@@ -105,7 +105,7 @@ impl CertifyCreationCmd {
         };
 
         let qualifying_data: TPM2B_DATA = match &self.qualification {
-            Some(bytes) => Data::try_from(bytes.as_slice())
+            Some(bytes) => Data::try_from(bytes.as_slice().to_vec())
                 .map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?
                 .into(),
             None => TPM2B_DATA::default(),

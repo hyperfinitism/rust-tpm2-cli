@@ -12,9 +12,11 @@ use anyhow::{Context, bail};
 use tss_esapi::attributes::NvIndexAttributesBuilder;
 use tss_esapi::handles::AuthHandle;
 use tss_esapi::interface_types::algorithm::{HashingAlgorithm, SymmetricMode};
-use tss_esapi::interface_types::resource_handles::{Hierarchy, HierarchyAuth, Provision};
+use tss_esapi::interface_types::ecc::EccCurve;
+use tss_esapi::interface_types::reserved_handles::{Hierarchy, HierarchyAuth, Provision};
 use tss_esapi::structures::{
-    Auth, HashScheme, PcrSelectionList, PcrSelectionListBuilder, PcrSlot, SignatureScheme,
+    Auth, Data, HashScheme, PcrSelectionList, PcrSelectionListBuilder, PcrSlot, SensitiveData,
+    SignatureScheme, SymmetricDefinition,
 };
 
 use crate::error::Tpm2Error;
@@ -103,9 +105,12 @@ pub fn parse_signature_scheme(
 ) -> anyhow::Result<SignatureScheme> {
     let hs = HashScheme::new(hash_alg);
     match s.to_lowercase().as_str() {
-        "rsassa" => Ok(SignatureScheme::RsaSsa { hash_scheme: hs }),
-        "rsapss" => Ok(SignatureScheme::RsaPss { hash_scheme: hs }),
-        "ecdsa" => Ok(SignatureScheme::EcDsa { hash_scheme: hs }),
+        "rsassa" => Ok(SignatureScheme::RsaSsa { scheme: hs }),
+        "rsapss" => Ok(SignatureScheme::RsaPss { scheme: hs }),
+        "ecdsa" => Ok(SignatureScheme::EcDsa { scheme: hs }),
+        "sm2" => Ok(SignatureScheme::Sm2 { scheme: hs }),
+        "ecschnorr" => Ok(SignatureScheme::EcSchnorr { scheme: hs }),
+        "hmac" => Ok(SignatureScheme::Hmac { scheme: hs.into() }),
         "null" => Ok(SignatureScheme::Null),
         _ => bail!("unsupported signature scheme: {s}"),
     }
@@ -436,6 +441,83 @@ pub fn parse_qualification(s: &str) -> Result<Qualification, String> {
             "expected 'hex:<hex_bytes>' or 'file:<path>', got: '{s}'"
         ))
     }
+}
+
+// ---------------------------------------------------------------------------
+// TPM2 comparison operation
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// ECC curve
+// ---------------------------------------------------------------------------
+
+/// Parse an ECC curve name.
+pub fn parse_ecc_curve(s: &str) -> anyhow::Result<EccCurve> {
+    match s.to_lowercase().as_str() {
+        "nistp192" | "ecc192" | "p192" => Ok(EccCurve::NistP192),
+        "nistp224" | "ecc224" | "p224" => Ok(EccCurve::NistP224),
+        "nistp256" | "ecc256" | "p256" => Ok(EccCurve::NistP256),
+        "nistp384" | "ecc384" | "p384" => Ok(EccCurve::NistP384),
+        "nistp521" | "ecc521" | "p521" => Ok(EccCurve::NistP521),
+        "bnp256" => Ok(EccCurve::BnP256),
+        "bnp638" => Ok(EccCurve::BnP638),
+        "sm2p256" | "sm2" => Ok(EccCurve::Sm2P256),
+        _ => bail!("unsupported ECC curve: {s}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Symmetric definition (for sessions)
+// ---------------------------------------------------------------------------
+
+/// Parse a symmetric algorithm definition for session encryption.
+///
+/// Accepted values: `aes128cfb`, `aes256cfb`, `xor`, `null`.
+pub fn parse_symmetric_definition(s: &str) -> anyhow::Result<SymmetricDefinition> {
+    match s.to_lowercase().as_str() {
+        "aes128cfb" | "aes-128-cfb" => Ok(SymmetricDefinition::AES_128_CFB),
+        "aes256cfb" | "aes-256-cfb" => Ok(SymmetricDefinition::AES_256_CFB),
+        "xor" => Ok(SymmetricDefinition::Xor {
+            hashing_algorithm: HashingAlgorithm::Sha256,
+        }),
+        "null" => Ok(SymmetricDefinition::Null),
+        _ => bail!(
+            "unsupported symmetric definition: {s} (supported: aes128cfb, aes256cfb, xor, null)"
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sensitive data (outside info, etc.)
+// ---------------------------------------------------------------------------
+
+/// Parse raw bytes from a CLI string.
+///
+/// Supported formats:
+/// - `hex:<hex_bytes>` — hex-encoded byte string
+/// - `file:<path>`     — read raw bytes from file
+/// - `<string>`        — plain UTF-8 string (fallback)
+pub fn parse_bytes(value: &str) -> anyhow::Result<Vec<u8>> {
+    if let Some(hex_str) = value.strip_prefix("hex:") {
+        hex::decode(hex_str).context("invalid hex data")
+    } else if let Some(path) = value.strip_prefix("file:") {
+        std::fs::read(std::path::Path::new(path))
+            .with_context(|| format!("reading data from '{path}'"))
+    } else {
+        Ok(value.as_bytes().to_vec())
+    }
+}
+
+/// Parse sensitive data from a CLI string.
+pub fn parse_sensitive_data(value: &str) -> anyhow::Result<SensitiveData> {
+    let bytes = parse_bytes(value)?;
+    SensitiveData::try_from(bytes).map_err(|e| anyhow::anyhow!("data too large: {e}"))
+}
+
+/// Parse a Data buffer from a CLI string (for outside_info etc.).
+pub fn parse_data(value: &str) -> anyhow::Result<Data> {
+    let bytes = parse_bytes(value)?;
+    Data::try_from(bytes).map_err(|e| anyhow::anyhow!("data too large: {e}"))
 }
 
 // ---------------------------------------------------------------------------

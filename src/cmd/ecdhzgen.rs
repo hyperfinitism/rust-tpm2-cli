@@ -58,9 +58,9 @@ impl EcdhZgenCmd {
             bail!("public point file too short");
         }
         let half = point_data.len() / 2;
-        let x = EccParameter::try_from(&point_data[..half])
+        let x = EccParameter::try_from(point_data[..half].to_vec())
             .map_err(|e| anyhow::anyhow!("invalid x coordinate: {e}"))?;
-        let y = EccParameter::try_from(&point_data[half..])
+        let y = EccParameter::try_from(point_data[half..].to_vec())
             .map_err(|e| anyhow::anyhow!("invalid y coordinate: {e}"))?;
         let in_point = EccPoint::new(x, y);
 
@@ -71,8 +71,8 @@ impl EcdhZgenCmd {
         .context("TPM2_ECDH_ZGen failed")?;
 
         let mut z_bytes = Vec::new();
-        z_bytes.extend_from_slice(z_point.x().value());
-        z_bytes.extend_from_slice(z_point.y().value());
+        z_bytes.extend_from_slice(z_point.x().as_bytes());
+        z_bytes.extend_from_slice(z_point.y().as_bytes());
 
         std::fs::write(&self.output, &z_bytes)
             .with_context(|| format!("writing Z point to {}", self.output.display()))?;

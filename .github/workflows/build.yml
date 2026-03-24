@@ -29,26 +29,36 @@ jobs:
       fail-fast: false
       matrix:
         toolchain:
-          - "1.90"
+          - "1.90.0"
           - stable
-        os:
-          - ubuntu-x64
-          - ubuntu-arm64
+        os-arch:
+          - ubuntu-24.04-x86_64
+          - ubuntu-24.04-aarch64
         include:
-          - os: ubuntu-x64
+          - os-arch: ubuntu-24.04-x86_64
             runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-          - os: ubuntu-arm64
+          - os-arch: ubuntu-24.04-aarch64
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
     steps:
-        - uses: actions/checkout@v6
-        - uses: actions-rust-lang/setup-rust-toolchain@v1
-          with:
-            toolchain: ${{ matrix.toolchain }}
-            target: ${{ matrix.target }}
-        - name: Install dependencies
-          run: |
-            sudo apt-get update
-            sudo apt-get install -y libtss2-dev pkg-config
-        - run: cargo build --workspace --all-targets --all-features --target ${{ matrix.target }}
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          target: ${{ matrix.target }}
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf-archive autoconf autoconf-archive automake build-essential doxygen pkg-config \
+            libtool libcmocka0 libcmocka-dev libcurl4-openssl-dev libftdi-dev libini-config-dev \
+            libjson-c-dev libltdl-dev libssl-dev libusb-1.0-0-dev uthash-dev uuid-dev
+        # sudo apt-get install -y libtss2-dev pkg-config
+      - name: Build
+        env:
+          TSS2_ESYS_STATIC: 1
+          TSS2_SYS_STATIC: 1
+          TSS2_MU_STATIC: 1
+          TSS2_TCTILDR_STATIC: 1
+        run: cargo build --workspace --all-targets --all-features --target ${{ matrix.target }}

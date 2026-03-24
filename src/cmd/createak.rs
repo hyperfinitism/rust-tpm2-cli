@@ -10,7 +10,7 @@ use tss_esapi::handles::ObjectHandle;
 use tss_esapi::interface_types::algorithm::{HashingAlgorithm, PublicAlgorithm};
 use tss_esapi::interface_types::ecc::EccCurve;
 use tss_esapi::interface_types::key_bits::RsaKeyBits;
-use tss_esapi::interface_types::resource_handles::HierarchyAuth;
+use tss_esapi::interface_types::reserved_handles::HierarchyAuth;
 use tss_esapi::interface_types::session_handles::AuthSession;
 use tss_esapi::structures::{
     EccScheme, HashScheme, KeyDerivationFunctionScheme, Public, PublicBuilder,
@@ -142,7 +142,7 @@ impl CreateAkCmd {
         }
 
         if let Some(ref path) = self.private {
-            std::fs::write(path, result.out_private.value())
+            std::fs::write(path, result.out_private.as_bytes())
                 .with_context(|| format!("writing private to {}", path.display()))?;
             info!("private saved to {}", path.display());
         }

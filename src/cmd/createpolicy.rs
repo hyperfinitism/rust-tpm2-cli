@@ -75,12 +75,12 @@ impl CreatePolicyCmd {
             .policy_get_digest(policy_session)
             .context("TPM2_PolicyGetDigest failed")?;
 
-        std::fs::write(&self.policy, digest.value())
+        std::fs::write(&self.policy, digest.as_bytes())
             .with_context(|| format!("writing policy to {}", self.policy.display()))?;
         info!(
             "policy digest saved to {} ({} bytes)",
             self.policy.display(),
-            digest.value().len()
+            digest.as_bytes().len()
         );
 
         // Flush the trial session.

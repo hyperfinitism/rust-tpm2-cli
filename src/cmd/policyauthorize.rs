@@ -59,7 +59,7 @@ impl PolicyAuthorizeCmd {
             .map_err(|e| anyhow::anyhow!("invalid approved policy: {e}"))?;
 
         let policy_ref = match &self.qualification {
-            Some(bytes) => Nonce::try_from(bytes.as_slice())
+            Some(bytes) => Nonce::try_from(bytes.as_slice().to_vec())
                 .map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?,
             None => Nonce::default(),
         };
@@ -95,7 +95,7 @@ impl PolicyAuthorizeCmd {
             let digest = ctx
                 .policy_get_digest(policy_session)
                 .context("TPM2_PolicyGetDigest failed")?;
-            std::fs::write(path, digest.value())
+            std::fs::write(path, digest.as_bytes())
                 .with_context(|| format!("writing policy digest to {}", path.display()))?;
         }
 

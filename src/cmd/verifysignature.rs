@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::interface_types::resource_handles::Hierarchy;
+use tss_esapi::interface_types::reserved_handles::Hierarchy;
 use tss_esapi::structures::{Digest, MaxBuffer, Public, Signature};
 use tss_esapi::traits::UnMarshall;
 use tss_esapi::tss2_esys::TPMT_TK_VERIFIED;
@@ -93,7 +93,7 @@ impl VerifySignatureCmd {
             let (digest, _ticket) = ctx
                 .execute_without_session(|ctx| ctx.hash(buffer.clone(), alg, self.hierarchy))
                 .context("TPM2_Hash failed")?;
-            digest.value().to_vec()
+            digest.as_bytes().to_vec()
         };
 
         let digest =
@@ -147,7 +147,7 @@ fn load_external_public_key(
     let public = Public::unmarshall(&pub_data)
         .map_err(|e| anyhow::anyhow!("failed to unmarshal public key: {e}"))?;
     let key_handle = ctx
-        .execute_without_session(|ctx| ctx.load_external_public(public, hierarchy))
+        .execute_without_session(|ctx| ctx.load_external(None, public, hierarchy))
         .context("TPM2_LoadExternal (public only) failed")?;
     info!("loaded external public key from {}", path.display());
     Ok(key_handle)

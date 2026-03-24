@@ -7,7 +7,7 @@ use clap::Parser;
 use log::info;
 use tss_esapi::handles::{NvIndexTpmHandle, ObjectHandle, TpmHandle};
 
-use tss_esapi::interface_types::resource_handles::Provision;
+use tss_esapi::interface_types::reserved_handles::Provision;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -18,6 +18,8 @@ use crate::session::execute_with_optional_session;
 ///
 /// The hierarchy used must match the one that authorized creation of the index
 /// (`-C o` for owner-created indices, `-C p` for platform-created).
+///
+/// Use `--special` for platform-created indices with TPMA_NV_POLICY_DELETE set.
 #[derive(Parser)]
 pub struct NvUndefineCmd {
     /// NV index handle to remove (hex, e.g. 0x01400001)
@@ -35,6 +37,10 @@ pub struct NvUndefineCmd {
     /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
     pub session: Option<PathBuf>,
+
+    /// Use NV_UndefineSpaceSpecial (for platform-created indices with policydelete)
+    #[arg(long = "special")]
+    pub special: bool,
 }
 
 impl NvUndefineCmd {
@@ -57,10 +63,17 @@ impl NvUndefineCmd {
             .context("failed to load NV index handle")?;
 
         let session_path = self.session.as_deref();
-        execute_with_optional_session(&mut ctx, session_path, |ctx| {
-            ctx.nv_undefine_space(self.hierarchy, nv_index_handle.into())
-        })
-        .context("TPM2_NV_UndefineSpace failed")?;
+        if self.special {
+            execute_with_optional_session(&mut ctx, session_path, |ctx| {
+                ctx.nv_undefine_space_special(self.hierarchy, nv_index_handle.into())
+            })
+            .context("TPM2_NV_UndefineSpaceSpecial failed")?;
+        } else {
+            execute_with_optional_session(&mut ctx, session_path, |ctx| {
+                ctx.nv_undefine_space(self.hierarchy, nv_index_handle.into())
+            })
+            .context("TPM2_NV_UndefineSpace failed")?;
+        }
 
         info!("NV index 0x{:08x} undefined", self.nv_index);
         Ok(())

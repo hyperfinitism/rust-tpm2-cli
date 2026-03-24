@@ -57,7 +57,7 @@ impl EcdhKeygenCmd {
 
 fn ecc_point_to_bytes(point: &tss_esapi::structures::EccPoint) -> Vec<u8> {
     let mut out = Vec::new();
-    out.extend_from_slice(point.x().value());
-    out.extend_from_slice(point.y().value());
+    out.extend_from_slice(point.x().as_bytes());
+    out.extend_from_slice(point.y().as_bytes());
     out
 }

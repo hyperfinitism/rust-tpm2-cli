@@ -10,7 +10,7 @@ use tss_esapi::handles::ObjectHandle;
 use tss_esapi::interface_types::algorithm::{HashingAlgorithm, PublicAlgorithm};
 use tss_esapi::interface_types::ecc::EccCurve;
 use tss_esapi::interface_types::key_bits::RsaKeyBits;
-use tss_esapi::interface_types::resource_handles::{Hierarchy, HierarchyAuth};
+use tss_esapi::interface_types::reserved_handles::{Hierarchy, HierarchyAuth};
 use tss_esapi::structures::{
     Digest, EccScheme, KeyDerivationFunctionScheme, Public, PublicBuilder,
     PublicEccParametersBuilder, PublicRsaParametersBuilder, RsaExponent, RsaScheme,
@@ -118,7 +118,7 @@ impl CreateEkCmd {
 }
 
 fn build_ek_public(alg: &str) -> anyhow::Result<Public> {
-    let auth_policy = Digest::try_from(EK_AUTH_POLICY_SHA256.as_slice())
+    let auth_policy = Digest::try_from(EK_AUTH_POLICY_SHA256.to_vec())
         .map_err(|e| anyhow::anyhow!("invalid auth policy: {e}"))?;
 
     let attributes = ObjectAttributesBuilder::new()

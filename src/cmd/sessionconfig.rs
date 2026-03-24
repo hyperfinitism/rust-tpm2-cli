@@ -65,7 +65,9 @@ impl SessionConfigCmd {
         let current_attrs = ctx
             .tr_sess_get_attributes(session)
             .context("failed to get session attributes")?;
-        let mut raw: TPMA_SESSION = current_attrs.into();
+        let mut raw: TPMA_SESSION = current_attrs
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("invalid session attributes: {e:?}"))?;
 
         // Modify based on flags using named bit constants.
         if self.enable_encrypt {

@@ -13,12 +13,12 @@ use tss_esapi::constants::SessionType;
 use tss_esapi::handles::{AuthHandle, ObjectHandle, SessionHandle};
 use tss_esapi::interface_types::algorithm::HashingAlgorithm;
 use tss_esapi::interface_types::session_handles::{AuthSession, PolicySession};
+use tss_esapi::structures::SavedTpmContext;
 use tss_esapi::structures::SymmetricDefinition;
-use tss_esapi::utils::TpmsContext;
 
 /// Load a session context from a JSON file and return it as an [`AuthSession`].
 ///
-/// The file must contain a serialized [`TpmsContext`] (as produced by
+/// The file must contain a serialized [`SavedTpmContext`] (as produced by
 /// [`tss_esapi::Context::context_save`]).  The `session_type` determines
 /// whether the returned [`AuthSession`] is an HMAC session or a policy
 /// session variant; the TPM itself tracks the real session type, but the
@@ -30,7 +30,7 @@ pub fn load_session_from_file(
 ) -> anyhow::Result<AuthSession> {
     let data =
         std::fs::read(path).with_context(|| format!("reading session file: {}", path.display()))?;
-    let saved: TpmsContext =
+    let saved: SavedTpmContext =
         serde_json::from_slice(&data).context("failed to deserialize session context")?;
     let obj_handle: ObjectHandle = ctx
         .context_load(saved)

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
@@ -8,6 +9,8 @@ use log::info;
 use tss_esapi::constants::SessionType;
 use tss_esapi::handles::{AuthHandle, ObjectHandle, SessionHandle};
 use tss_esapi::interface_types::session_handles::AuthSession;
+use tss_esapi::structures::{Digest, Nonce};
+use tss_esapi::tss2_esys::TPMT_TK_AUTH;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -40,6 +43,30 @@ pub struct PolicySecretCmd {
     /// Authorization value for the object
     #[arg(short = 'p', long = "auth")]
     pub auth: Option<String>,
+
+    /// Nonce TPM value (hex:<hex> or file:<path>)
+    #[arg(long = "nonce")]
+    pub nonce: Option<String>,
+
+    /// CP hash value (hex:<hex> or file:<path>)
+    #[arg(long = "cp-hash")]
+    pub cp_hash: Option<String>,
+
+    /// Policy reference value (hex:<hex> or file:<path>)
+    #[arg(long = "policy-ref")]
+    pub policy_ref: Option<String>,
+
+    /// Expiration timeout in seconds (0 for no expiration)
+    #[arg(short = 'x', long = "expiration")]
+    pub expiration: Option<i32>,
+
+    /// Output file for the timeout value
+    #[arg(short = 't', long = "timeout")]
+    pub timeout_out: Option<PathBuf>,
+
+    /// Output file for the policy ticket
+    #[arg(long = "ticket")]
+    pub ticket_out: Option<PathBuf>,
 }
 
 impl PolicySecretCmd {
@@ -85,28 +112,87 @@ impl PolicySecretCmd {
             }
         }
 
+        // Parse optional parameters.
+        let nonce_tpm = match &self.nonce {
+            Some(s) => {
+                let data = parse::parse_sensitive_data(s)?;
+                Nonce::try_from(data.as_bytes().to_vec())
+                    .map_err(|e| anyhow::anyhow!("invalid nonce: {e}"))?
+            }
+            None => Default::default(),
+        };
+
+        let cp_hash_a = match &self.cp_hash {
+            Some(s) => {
+                let data = parse::parse_sensitive_data(s)?;
+                Digest::try_from(data.as_bytes().to_vec())
+                    .map_err(|e| anyhow::anyhow!("invalid cp-hash: {e}"))?
+            }
+            None => Default::default(),
+        };
+
+        let policy_ref = match &self.policy_ref {
+            Some(s) => {
+                let data = parse::parse_sensitive_data(s)?;
+                Nonce::try_from(data.as_bytes().to_vec())
+                    .map_err(|e| anyhow::anyhow!("invalid policy-ref: {e}"))?
+            }
+            None => Default::default(),
+        };
+
+        let expiration = self.expiration.and_then(|secs| {
+            if secs > 0 {
+                Some(Duration::from_secs(secs as u64))
+            } else {
+                None
+            }
+        });
+
         // Execute PolicySecret with a password session for the auth entity.
         ctx.set_sessions((Some(AuthSession::Password), None, None));
-        let (_timeout, _ticket) = ctx
+        let (timeout, ticket) = ctx
             .policy_secret(
                 policy_session,
                 auth_handle,
-                Default::default(), // nonce_tpm
-                Default::default(), // cp_hash_a
-                Default::default(), // policy_ref
-                None,               // expiration
+                nonce_tpm,
+                cp_hash_a,
+                policy_ref,
+                expiration,
             )
             .context("TPM2_PolicySecret failed")?;
         ctx.clear_sessions();
 
         info!("policy secret satisfied");
 
+        // Optionally save the timeout value.
+        if let Some(ref path) = self.timeout_out {
+            std::fs::write(path, timeout.as_bytes())
+                .with_context(|| format!("writing timeout to {}", path.display()))?;
+            info!("timeout saved to {}", path.display());
+        }
+
+        // Optionally save the policy ticket.
+        if let Some(ref path) = self.ticket_out {
+            let tss_ticket: TPMT_TK_AUTH = ticket
+                .try_into()
+                .map_err(|e| anyhow::anyhow!("failed to convert ticket: {e:?}"))?;
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    &tss_ticket as *const TPMT_TK_AUTH as *const u8,
+                    std::mem::size_of::<TPMT_TK_AUTH>(),
+                )
+            };
+            std::fs::write(path, bytes)
+                .with_context(|| format!("writing ticket to {}", path.display()))?;
+            info!("ticket saved to {}", path.display());
+        }
+
         // Optionally save the policy digest.
         if let Some(ref path) = self.policy {
             let digest = ctx
                 .policy_get_digest(policy_session)
                 .context("TPM2_PolicyGetDigest failed")?;
-            std::fs::write(path, digest.value())
+            std::fs::write(path, digest.as_bytes())
                 .with_context(|| format!("writing policy digest to {}", path.display()))?;
             info!("policy digest saved to {}", path.display());
         }

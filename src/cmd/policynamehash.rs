@@ -54,7 +54,7 @@ impl PolicyNameHashCmd {
             let digest = ctx
                 .policy_get_digest(policy_session)
                 .context("TPM2_PolicyGetDigest failed")?;
-            std::fs::write(path, digest.value())
+            std::fs::write(path, digest.as_bytes())
                 .with_context(|| format!("writing policy digest to {}", path.display()))?;
         }
 

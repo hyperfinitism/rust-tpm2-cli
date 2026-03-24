@@ -5,9 +5,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, bail};
 use clap::Parser;
+use tss_esapi::structures::SavedTpmContext;
 use tss_esapi::structures::{Attest, AttestInfo, Public, PublicBuffer};
 use tss_esapi::traits::UnMarshall;
-use tss_esapi::utils::TpmsContext;
 
 /// Decode and display a TPM data structure.
 ///
@@ -65,7 +65,10 @@ fn print_attest(data: &[u8]) -> anyhow::Result<()> {
         "qualified_signer: {}",
         hex::encode(attest.qualified_signer().value())
     );
-    println!("extra_data: {}", hex::encode(attest.extra_data().value()));
+    println!(
+        "extra_data: {}",
+        hex::encode(attest.extra_data().as_bytes())
+    );
     println!("clock_info:");
     let ci = attest.clock_info();
     println!("  clock: {}", ci.clock());
@@ -78,7 +81,10 @@ fn print_attest(data: &[u8]) -> anyhow::Result<()> {
         AttestInfo::Quote { info } => {
             println!("attested:");
             println!("  type: quote");
-            println!("  pcr_digest: {}", hex::encode(info.pcr_digest().value()));
+            println!(
+                "  pcr_digest: {}",
+                hex::encode(info.pcr_digest().as_bytes())
+            );
             println!("  pcr_selection: {:?}", info.pcr_selection());
         }
         AttestInfo::Certify { info } => {
@@ -96,7 +102,7 @@ fn print_attest(data: &[u8]) -> anyhow::Result<()> {
             println!("  object_name: {}", hex::encode(info.object_name().value()));
             println!(
                 "  creation_hash: {}",
-                hex::encode(info.creation_hash().value())
+                hex::encode(info.creation_hash().as_bytes())
             );
         }
         AttestInfo::Time { info } => {
@@ -117,7 +123,7 @@ fn print_attest(data: &[u8]) -> anyhow::Result<()> {
 }
 
 fn print_context(data: &[u8]) -> anyhow::Result<()> {
-    let ctx: TpmsContext =
+    let ctx: SavedTpmContext =
         serde_json::from_slice(data).context("failed to deserialize TPMS_CONTEXT")?;
     println!("{ctx:#?}");
     Ok(())
@@ -152,9 +158,9 @@ fn print_public(public: &Public) {
             println!("type: rsa");
             println!("name_hash_algorithm: {name_hashing_algorithm:?}");
             println!("object_attributes: {object_attributes:?}");
-            println!("auth_policy: {}", hex::encode(auth_policy.value()));
+            println!("auth_policy: {}", hex::encode(auth_policy.as_bytes()));
             println!("parameters: {parameters:?}");
-            println!("modulus: {}", hex::encode(unique.value()));
+            println!("modulus: {}", hex::encode(unique.as_bytes()));
         }
         Public::Ecc {
             object_attributes,
@@ -166,10 +172,10 @@ fn print_public(public: &Public) {
             println!("type: ecc");
             println!("name_hash_algorithm: {name_hashing_algorithm:?}");
             println!("object_attributes: {object_attributes:?}");
-            println!("auth_policy: {}", hex::encode(auth_policy.value()));
+            println!("auth_policy: {}", hex::encode(auth_policy.as_bytes()));
             println!("parameters: {parameters:?}");
-            println!("x: {}", hex::encode(unique.x().value()));
-            println!("y: {}", hex::encode(unique.y().value()));
+            println!("x: {}", hex::encode(unique.x().as_bytes()));
+            println!("y: {}", hex::encode(unique.y().as_bytes()));
         }
         Public::KeyedHash {
             object_attributes,
@@ -181,9 +187,9 @@ fn print_public(public: &Public) {
             println!("type: keyedhash");
             println!("name_hash_algorithm: {name_hashing_algorithm:?}");
             println!("object_attributes: {object_attributes:?}");
-            println!("auth_policy: {}", hex::encode(auth_policy.value()));
+            println!("auth_policy: {}", hex::encode(auth_policy.as_bytes()));
             println!("parameters: {parameters:?}");
-            println!("unique: {}", hex::encode(unique.value()));
+            println!("unique: {}", hex::encode(unique.as_bytes()));
         }
         Public::SymCipher {
             object_attributes,
@@ -195,9 +201,9 @@ fn print_public(public: &Public) {
             println!("type: symcipher");
             println!("name_hash_algorithm: {name_hashing_algorithm:?}");
             println!("object_attributes: {object_attributes:?}");
-            println!("auth_policy: {}", hex::encode(auth_policy.value()));
+            println!("auth_policy: {}", hex::encode(auth_policy.as_bytes()));
             println!("parameters: {parameters:?}");
-            println!("unique: {}", hex::encode(unique.value()));
+            println!("unique: {}", hex::encode(unique.as_bytes()));
         }
     }
 }

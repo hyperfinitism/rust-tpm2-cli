@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::interface_types::resource_handles::Hierarchy;
+use tss_esapi::interface_types::reserved_handles::Hierarchy;
 use tss_esapi::structures::{Digest, Name, Public};
 use tss_esapi::traits::UnMarshall;
 
@@ -56,9 +56,7 @@ impl MakeCredentialCmd {
 
         // Load the public key into the TPM (public-only, no private part).
         let key_handle = ctx
-            .execute_without_session(|ctx| {
-                ctx.load_external_public(public.clone(), Hierarchy::Null)
-            })
+            .execute_without_session(|ctx| ctx.load_external(None, public.clone(), Hierarchy::Null))
             .context("TPM2_LoadExternal failed")?;
 
         // Make credential.
@@ -69,8 +67,8 @@ impl MakeCredentialCmd {
             .context("TPM2_MakeCredential failed")?;
 
         // Write credential blob: [u16 id_len][id_data][u16 secret_len][secret_data].
-        let id_data = id_object.value();
-        let secret_data = encrypted_secret.value();
+        let id_data = id_object.as_bytes();
+        let secret_data = encrypted_secret.as_bytes();
         let mut blob = Vec::with_capacity(4 + id_data.len() + secret_data.len());
         blob.extend_from_slice(&(id_data.len() as u16).to_be_bytes());
         blob.extend_from_slice(id_data);

@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use tss_esapi::handles::{KeyHandle, NvIndexTpmHandle, ObjectHandle, TpmHandle};
-use tss_esapi::interface_types::resource_handles::NvAuth;
-use tss_esapi::utils::TpmsContext;
+use tss_esapi::interface_types::reserved_handles::NvAuth;
+use tss_esapi::structures::SavedTpmContext;
 
 // ---------------------------------------------------------------------------
 // ContextSource — type-safe split of "hex handle vs. file path"
@@ -73,7 +73,7 @@ pub fn load_key_context_file(
 ) -> anyhow::Result<KeyHandle> {
     let data =
         std::fs::read(path).with_context(|| format!("reading context file: {}", path.display()))?;
-    let saved: TpmsContext =
+    let saved: SavedTpmContext =
         serde_json::from_slice(&data).context("failed to deserialize context")?;
     let handle = ctx.context_load(saved).context("context_load failed")?;
     Ok(handle.into())
@@ -86,7 +86,7 @@ pub fn load_object_context_file(
 ) -> anyhow::Result<ObjectHandle> {
     let data =
         std::fs::read(path).with_context(|| format!("reading context file: {}", path.display()))?;
-    let saved: TpmsContext =
+    let saved: SavedTpmContext =
         serde_json::from_slice(&data).context("failed to deserialize context")?;
     let handle = ctx.context_load(saved).context("context_load failed")?;
     Ok(handle)

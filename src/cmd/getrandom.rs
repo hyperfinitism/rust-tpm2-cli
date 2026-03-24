@@ -45,7 +45,7 @@ impl GetRandomCmd {
         })
         .context("TPM2_GetRandom failed")?;
 
-        let bytes = random.value();
+        let bytes = random.as_bytes();
         if bytes.len() < num_bytes as usize {
             warn!(
                 "TPM returned fewer bytes than requested: expected {}, got {}",
