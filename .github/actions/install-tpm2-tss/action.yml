@@ -1,0 +1,27 @@
+name: Install tpm2-tss latest
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          git autoconf autoconf-archive automake build-essential doxygen pkg-config \
+          libtool libcmocka0 libcmocka-dev libcurl4-openssl-dev libftdi-dev libini-config-dev \
+          libjson-c-dev libltdl-dev libssl-dev libusb-1.0-0-dev uthash-dev uuid-dev
+    - name: Build and Install tpm2-tss
+      shell: bash
+      run: |
+        git clone --depth 1 https://github.com/tpm2-software/tpm2-tss
+        cd tpm2-tss
+        git tag "4.1.999" # Dummy version
+        ./bootstrap
+        ./configure --prefix=/usr \
+          --disable-fapi --disable-weakcrypto --disable-integration
+        make -j$(nproc)
+        sudo make install
+        sudo ldconfig
+        cd ..
+        rm -rf tpm2-tss

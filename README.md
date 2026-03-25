@@ -18,17 +18,35 @@ The `rust-tpm2-cli` crate provides a suite of Rust-based command-line tools for 
 ### Install dependencies
 
 ```bash
-# Dependencies for tpm2-tss v4.1.3
-sudo apt update
-sudo apt install -y \
-  autoconf-archive autoconf autoconf-archive automake build-essential doxygen pkg-config \
-  libtool libcmocka0 libcmocka-dev libcurl4-openssl-dev libftdi-dev libini-config-dev \
-  libjson-c-dev libltdl-dev libssl-dev libusb-1.0-0-dev uthash-dev uuid-dev
-
-# Rust toolchain
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 ```
+
+`rust-tpm2-cli` targets the latest `tpm2-tss`'s main branch, which includes significant updates beyond the 4.1.3 release (e.g. Unix domain socket support for the swtpm TCTI).
+However, as of now, the next version (v4.2.0) has not yet been released.
+To build [tpm2-tss](https://github.com/tpm2-software/tpm2-tss) from source:
+
+```bash
+# Install build dependencies
+sudo apt update
+sudo apt install -y \
+    git autoconf autoconf-archive automake build-essential doxygen pkg-config \
+    libtool libcmocka0 libcmocka-dev libcurl4-openssl-dev libftdi-dev libini-config-dev \
+    libjson-c-dev libltdl-dev libssl-dev libusb-1.0-0-dev uthash-dev uuid-dev
+
+# Clone latest main and build
+git clone --depth 1 https://github.com/tpm2-software/tpm2-tss
+cd tpm2-tss
+git tag "4.1.999" # Dummy version
+./bootstrap
+./configure --prefix=/usr \
+    --disable-fapi --disable-weakcrypto --disable-integration
+make -j$(nproc)
+sudo make install
+sudo ldconfig
+```
+
+See also [Installation instructions for tpm2-tss](https://github.com/tpm2-software/tpm2-tss/blob/master/INSTALL.md).
 
 ### Build `rust-tpm2-cli`
 
@@ -104,8 +122,8 @@ sudo apt install -y swtpm
 # Start swtpm
 mkdir -p /tmp/swtpm
 swtpm socket \
-    --tpmstate dir=/tmp/swtpm \
     --tpm2 \
+    --tpmstate dir=/tmp/swtpm \
     --server type=tcp,port=2321 \
     --ctrl type=tcp,port=2322 \
     --flags startup-clear

@@ -52,19 +52,14 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
           target: ${{ matrix.target }}
-      - name: Install dependencies and swtpm
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            autoconf-archive autoconf autoconf-archive automake build-essential doxygen pkg-config \
-            libtool libcmocka0 libcmocka-dev libcurl4-openssl-dev libftdi-dev libini-config-dev \
-            libjson-c-dev libltdl-dev libssl-dev libusb-1.0-0-dev uthash-dev uuid-dev
-          sudo apt-get install -y swtpm
-        # sudo apt-get install -y libtss2-dev pkg-config
+      - uses: ./.github/actions/install-tpm2-tss
+      # - run: sudo apt-get update && sudo apt-get install -y libtss2-dev pkg-config
+      - name: Install swtpm
+        run: sudo apt-get install -y swtpm
       - name: Run integration tests
         env:
           TSS2_ESYS_STATIC: 1
           TSS2_SYS_STATIC: 1
           TSS2_MU_STATIC: 1
           TSS2_TCTILDR_STATIC: 1
-        run: bash ./tests/run_all.sh
+        run: cargo test --all-targets
