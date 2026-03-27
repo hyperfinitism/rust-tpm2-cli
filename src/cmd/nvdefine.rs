@@ -5,8 +5,10 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
+use tss_esapi::attributes::NvIndexAttributes;
 use tss_esapi::handles::NvIndexTpmHandle;
-use tss_esapi::structures::NvPublicBuilder;
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
+use tss_esapi::structures::{Auth, NvPublicBuilder};
 
 use tss_esapi::interface_types::reserved_handles::Provision;
 
@@ -31,20 +33,21 @@ pub struct NvDefineCmd {
     pub size: u16,
 
     /// Hash algorithm for the NV index
-    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
-    pub algorithm: String,
+    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
+    pub algorithm: HashingAlgorithm,
 
     /// NV attributes as raw hex or symbolic names
     #[arg(
         short = 'a',
         long = "attributes",
-        default_value = "ownerwrite|ownerread"
+        default_value = "ownerwrite|ownerread",
+        value_parser = parse::parse_nv_attributes
     )]
-    pub attributes: String,
+    pub attributes: NvIndexAttributes,
 
     /// Authorization value for the NV area
-    #[arg(short = 'p', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
@@ -57,26 +60,18 @@ impl NvDefineCmd {
 
         let nv_handle = NvIndexTpmHandle::new(self.nv_index)
             .map_err(|e| anyhow::anyhow!("invalid NV index handle: {e}"))?;
-        let alg = parse::parse_hashing_algorithm(&self.algorithm)?;
-
-        let nv_attributes = parse::parse_nv_attributes(&self.attributes)?;
-
-        let auth = match &self.auth {
-            Some(a) => Some(parse::parse_auth(a)?),
-            None => None,
-        };
 
         let nv_public = NvPublicBuilder::new()
             .with_nv_index(nv_handle)
-            .with_index_name_algorithm(alg)
-            .with_index_attributes(nv_attributes)
+            .with_index_name_algorithm(self.algorithm)
+            .with_index_attributes(self.attributes)
             .with_data_area_size(self.size as usize)
             .build()
             .context("failed to build NvPublic")?;
 
         let session_path = self.session.as_deref();
         execute_with_optional_session(&mut ctx, session_path, |ctx| {
-            ctx.nv_define_space(self.hierarchy, auth.clone(), nv_public.clone())
+            ctx.nv_define_space(self.hierarchy, self.auth.clone(), nv_public.clone())
         })
         .context("TPM2_NV_DefineSpace failed")?;
 

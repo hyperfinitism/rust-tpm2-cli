@@ -46,7 +46,7 @@ impl PcrExtendCmd {
                 .split_once('=')
                 .ok_or_else(|| anyhow::anyhow!("expected <alg>=<hex> in '{part}'"))?;
 
-            let alg = parse::parse_hashing_algorithm(alg_str)?;
+            let alg = parse::parse_hashing_algorithm(alg_str).map_err(anyhow::Error::msg)?;
             let bytes =
                 hex::decode(hex_str).with_context(|| format!("invalid hex in '{hex_str}'"))?;
             let digest = bytes

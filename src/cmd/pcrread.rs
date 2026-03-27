@@ -6,6 +6,8 @@ use clap::Parser;
 use log::info;
 use tss_esapi::structures::PcrSlot;
 
+use tss_esapi::structures::PcrSelectionList;
+
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::output;
@@ -20,7 +22,8 @@ use crate::pcr;
 #[derive(Parser)]
 pub struct PcrReadCmd {
     /// PCR selection list (e.g. sha256:0,1,2+sha1:all)
-    pub pcr_list: Option<String>,
+    #[arg(value_parser = parse::parse_pcr_selection)]
+    pub pcr_list: Option<PcrSelectionList>,
 
     /// Output binary PCR values to a file
     #[arg(short = 'o', long)]
@@ -32,8 +35,8 @@ impl PcrReadCmd {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
         let selection = match &self.pcr_list {
-            Some(spec) => parse::parse_pcr_selection(spec)?,
-            None => parse::default_pcr_selection()?,
+            Some(sel) => sel.clone(),
+            None => parse::default_pcr_selection().map_err(anyhow::Error::msg)?,
         };
 
         // TPM2_PCR_Read returns at most 8 digests per call; loop until all

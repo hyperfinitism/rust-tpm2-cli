@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
 use tss_esapi::interface_types::reserved_handles::Hierarchy;
 use tss_esapi::structures::{Digest, MaxBuffer, Public, Signature};
 use tss_esapi::traits::UnMarshall;
@@ -41,9 +42,10 @@ pub struct VerifySignatureCmd {
         long = "hash-algorithm",
         default_value = "sha256",
         requires = "message",
-        conflicts_with = "digest"
+        conflicts_with = "digest",
+        value_parser = parse::parse_hashing_algorithm
     )]
-    pub hash_algorithm: Option<String>,
+    pub hash_algorithm: Option<HashingAlgorithm>,
 
     /// File containing the message that was signed
     #[arg(short = 'm', long = "message", conflicts_with = "digest")]
@@ -85,9 +87,7 @@ impl VerifySignatureCmd {
             let message_path = self.message.as_ref().unwrap();
             let message_bytes = std::fs::read(message_path)
                 .with_context(|| format!("reading message: {}", message_path.display()))?;
-            let hash_alg_str = self.hash_algorithm.as_ref().unwrap();
-            let alg = parse::parse_hashing_algorithm(hash_alg_str)
-                .with_context(|| "failed to parse hash algorithm")?;
+            let alg = *self.hash_algorithm.as_ref().unwrap();
             let buffer = MaxBuffer::try_from(message_bytes)
                 .map_err(|e| anyhow::anyhow!("input too large: {e}"))?;
             let (digest, _ticket) = ctx

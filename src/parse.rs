@@ -5,10 +5,13 @@
 //! Every function in this module converts a CLI string into a typed value
 //! without touching a TPM context.  Functions that need a [`tss_esapi::Context`]
 //! live in [`crate::handle`] or [`crate::session`].
+//!
+//! All public parse functions return `Result<T, E>` where `E` is either
+//! [`String`] or [`Tpm2Error`], making them directly usable as clap
+//! `value_parser` callbacks.
 
 use std::path::PathBuf;
 
-use anyhow::{Context, bail};
 use tss_esapi::attributes::NvIndexAttributesBuilder;
 use tss_esapi::handles::AuthHandle;
 use tss_esapi::interface_types::algorithm::{HashingAlgorithm, SymmetricMode};
@@ -80,7 +83,9 @@ pub fn parse_context_source(s: &str) -> Result<ContextSource, String> {
 // ---------------------------------------------------------------------------
 
 /// Parse a hashing algorithm name.
-pub fn parse_hashing_algorithm(s: &str) -> anyhow::Result<HashingAlgorithm> {
+///
+/// Intended for use as a clap `value_parser`.
+pub fn parse_hashing_algorithm(s: &str) -> Result<HashingAlgorithm, String> {
     match s.to_lowercase().as_str() {
         "sha1" | "sha" => Ok(HashingAlgorithm::Sha1),
         "sha256" => Ok(HashingAlgorithm::Sha256),
@@ -90,7 +95,7 @@ pub fn parse_hashing_algorithm(s: &str) -> anyhow::Result<HashingAlgorithm> {
         "sha3_256" => Ok(HashingAlgorithm::Sha3_256),
         "sha3_384" => Ok(HashingAlgorithm::Sha3_384),
         "sha3_512" => Ok(HashingAlgorithm::Sha3_512),
-        _ => bail!("unknown hashing algorithm: {s}"),
+        _ => Err(format!("unknown hashing algorithm: {s}")),
     }
 }
 
@@ -99,10 +104,15 @@ pub fn parse_hashing_algorithm(s: &str) -> anyhow::Result<HashingAlgorithm> {
 // ---------------------------------------------------------------------------
 
 /// Parse a signature scheme name together with the hashing algorithm it uses.
+///
+/// This function takes two parameters and therefore cannot be used as a clap
+/// `value_parser` directly.  The `hash_alg` parameter should be parsed at CLI
+/// time via [`parse_hashing_algorithm`], and this function should be called at
+/// execution time to combine them.
 pub fn parse_signature_scheme(
     s: &str,
     hash_alg: HashingAlgorithm,
-) -> anyhow::Result<SignatureScheme> {
+) -> Result<SignatureScheme, String> {
     let hs = HashScheme::new(hash_alg);
     match s.to_lowercase().as_str() {
         "rsassa" => Ok(SignatureScheme::RsaSsa { scheme: hs }),
@@ -112,7 +122,7 @@ pub fn parse_signature_scheme(
         "ecschnorr" => Ok(SignatureScheme::EcSchnorr { scheme: hs }),
         "hmac" => Ok(SignatureScheme::Hmac { scheme: hs.into() }),
         "null" => Ok(SignatureScheme::Null),
-        _ => bail!("unsupported signature scheme: {s}"),
+        _ => Err(format!("unsupported signature scheme: {s}")),
     }
 }
 
@@ -243,6 +253,8 @@ pub fn parse_nv_auth_entity(value: &str) -> Result<NvAuthEntity, String> {
 /// - `hex:<hex_bytes>` — hex-encoded byte string
 /// - `file:<path>`     — read raw bytes from file
 /// - `<string>`        — plain UTF-8 password (fallback)
+///
+/// Intended for use as a clap `value_parser`.
 pub fn parse_auth(value: &str) -> Result<Auth, Tpm2Error> {
     let bytes = if let Some(hex_str) = value.strip_prefix("hex:") {
         hex::decode(hex_str).map_err(|e| Tpm2Error::InvalidAuth(e.to_string()))?
@@ -264,10 +276,8 @@ pub fn parse_auth(value: &str) -> Result<Auth, Tpm2Error> {
 /// and the NV index type via `nt=ordinary`, `nt=counter`, `nt=bits`,
 /// `nt=extend`, `nt=pinfail`, `nt=pinpass`.
 ///
-/// Reference:
-/// "Trusted Platform Module 2.0 Library Part 2: Structures" Section 13
-/// https://trustedcomputinggroup.org/wp-content/uploads/Trusted-Platform-Module-2.0-Library-Part-2-Structures_Version-185_pub.pdf
-pub fn parse_nv_attributes(s: &str) -> anyhow::Result<tss_esapi::attributes::NvIndexAttributes> {
+/// Intended for use as a clap `value_parser`.
+pub fn parse_nv_attributes(s: &str) -> Result<tss_esapi::attributes::NvIndexAttributes, String> {
     use tss_esapi::constants::NvIndexType;
 
     let mut builder = NvIndexAttributesBuilder::new();
@@ -283,7 +293,7 @@ pub fn parse_nv_attributes(s: &str) -> anyhow::Result<tss_esapi::attributes::NvI
                 "extend" | "4" => NvIndexType::Extend,
                 "pinfail" | "8" => NvIndexType::PinFail,
                 "pinpass" | "9" => NvIndexType::PinPass,
-                _ => anyhow::bail!("unknown NV index type: {nt_val}"),
+                _ => return Err(format!("unknown NV index type: {nt_val}")),
             };
             builder = builder.with_nv_index_type(nv_type);
             continue;
@@ -311,15 +321,17 @@ pub fn parse_nv_attributes(s: &str) -> anyhow::Result<tss_esapi::attributes::NvI
             "written" => builder.with_written(true),               // 29
             "platformcreate" | "platform_create" => builder.with_platform_create(true), // 30
             "read_stclear" => builder.with_read_stclear(true),     // 31
-            // rust-tss-esapi v7.6.0 does not support the following fields:
+            // rust-tss-esapi v8.0.0-alpha.2 does not support the following fields:
             // 32: TPMA_EXTERNAL_NV_ENCRYPTION
             // 33: TPMA_EXTERNAL_NV_INTEGRITY
             // 34: TPMA_EXTERNAL_NV_ANTIROLLBACK
-            _ => anyhow::bail!("unknown NV attribute: {attr}"),
+            _ => return Err(format!("unknown NV attribute: {attr}")),
         };
     }
 
-    builder.build().context("failed to build NV attributes")
+    builder
+        .build()
+        .map_err(|e| format!("failed to build NV attributes: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -327,13 +339,15 @@ pub fn parse_nv_attributes(s: &str) -> anyhow::Result<tss_esapi::attributes::NvI
 // ---------------------------------------------------------------------------
 
 /// Parse a PCR selection string like `sha256:0,1,2+sha1:all`.
-pub fn parse_pcr_selection(spec: &str) -> anyhow::Result<PcrSelectionList> {
+///
+/// Intended for use as a clap `value_parser`.
+pub fn parse_pcr_selection(spec: &str) -> Result<PcrSelectionList, String> {
     let mut builder = PcrSelectionListBuilder::new();
 
     for bank_spec in spec.split('+') {
         let (alg_str, indices_str) = bank_spec
             .split_once(':')
-            .ok_or_else(|| anyhow::anyhow!("invalid PCR spec: missing ':' in '{bank_spec}'"))?;
+            .ok_or_else(|| format!("invalid PCR spec: missing ':' in '{bank_spec}'"))?;
 
         let alg = parse_hashing_algorithm(alg_str)?;
         let slots = parse_pcr_indices(indices_str)?;
@@ -342,17 +356,17 @@ pub fn parse_pcr_selection(spec: &str) -> anyhow::Result<PcrSelectionList> {
 
     builder
         .build()
-        .context("failed to build PCR selection list")
+        .map_err(|e| format!("failed to build PCR selection list: {e}"))
 }
 
 /// Build a default selection covering sha256 and sha1, all 24 PCRs.
-pub fn default_pcr_selection() -> anyhow::Result<PcrSelectionList> {
+pub fn default_pcr_selection() -> Result<PcrSelectionList, String> {
     let all_slots = all_pcr_slots();
     PcrSelectionListBuilder::new()
         .with_selection(HashingAlgorithm::Sha256, &all_slots)
         .with_selection(HashingAlgorithm::Sha1, &all_slots)
         .build()
-        .context("failed to build default PCR selection list")
+        .map_err(|e| format!("failed to build default PCR selection list: {e}"))
 }
 
 /// Convert a PCR index (0..31) to the corresponding [`PcrSlot`] enum variant.
@@ -367,7 +381,7 @@ pub fn pcr_slot_to_index(slot: PcrSlot) -> u8 {
     val.trailing_zeros() as u8
 }
 
-fn parse_pcr_indices(s: &str) -> anyhow::Result<Vec<PcrSlot>> {
+fn parse_pcr_indices(s: &str) -> Result<Vec<PcrSlot>, String> {
     if s.eq_ignore_ascii_case("all") {
         return Ok(all_pcr_slots());
     }
@@ -377,8 +391,8 @@ fn parse_pcr_indices(s: &str) -> anyhow::Result<Vec<PcrSlot>> {
             let idx: u8 = tok
                 .trim()
                 .parse()
-                .with_context(|| format!("invalid PCR index: {tok}"))?;
-            index_to_pcr_slot(idx).ok_or_else(|| anyhow::anyhow!("PCR index out of range: {idx}"))
+                .map_err(|_| format!("invalid PCR index: {tok}"))?;
+            index_to_pcr_slot(idx).ok_or_else(|| format!("PCR index out of range: {idx}"))
         })
         .collect()
 }
@@ -392,7 +406,9 @@ fn all_pcr_slots() -> Vec<PcrSlot> {
 // ---------------------------------------------------------------------------
 
 /// Parse a symmetric cipher mode name.
-pub fn parse_symmetric_mode(s: &str) -> anyhow::Result<SymmetricMode> {
+///
+/// Intended for use as a clap `value_parser`.
+pub fn parse_symmetric_mode(s: &str) -> Result<SymmetricMode, String> {
     match s.to_lowercase().as_str() {
         "cfb" => Ok(SymmetricMode::Cfb),
         "cbc" => Ok(SymmetricMode::Cbc),
@@ -400,7 +416,7 @@ pub fn parse_symmetric_mode(s: &str) -> anyhow::Result<SymmetricMode> {
         "ofb" => Ok(SymmetricMode::Ofb),
         "ctr" => Ok(SymmetricMode::Ctr),
         "null" => Ok(SymmetricMode::Null),
-        _ => bail!("unsupported symmetric mode: {s}"),
+        _ => Err(format!("unsupported symmetric mode: {s}")),
     }
 }
 
@@ -444,15 +460,13 @@ pub fn parse_qualification(s: &str) -> Result<Qualification, String> {
 }
 
 // ---------------------------------------------------------------------------
-// TPM2 comparison operation
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // ECC curve
 // ---------------------------------------------------------------------------
 
 /// Parse an ECC curve name.
-pub fn parse_ecc_curve(s: &str) -> anyhow::Result<EccCurve> {
+///
+/// Intended for use as a clap `value_parser`.
+pub fn parse_ecc_curve(s: &str) -> Result<EccCurve, String> {
     match s.to_lowercase().as_str() {
         "nistp192" | "ecc192" | "p192" => Ok(EccCurve::NistP192),
         "nistp224" | "ecc224" | "p224" => Ok(EccCurve::NistP224),
@@ -462,7 +476,7 @@ pub fn parse_ecc_curve(s: &str) -> anyhow::Result<EccCurve> {
         "bnp256" => Ok(EccCurve::BnP256),
         "bnp638" => Ok(EccCurve::BnP638),
         "sm2p256" | "sm2" => Ok(EccCurve::Sm2P256),
-        _ => bail!("unsupported ECC curve: {s}"),
+        _ => Err(format!("unsupported ECC curve: {s}")),
     }
 }
 
@@ -473,7 +487,9 @@ pub fn parse_ecc_curve(s: &str) -> anyhow::Result<EccCurve> {
 /// Parse a symmetric algorithm definition for session encryption.
 ///
 /// Accepted values: `aes128cfb`, `aes256cfb`, `xor`, `null`.
-pub fn parse_symmetric_definition(s: &str) -> anyhow::Result<SymmetricDefinition> {
+///
+/// Intended for use as a clap `value_parser`.
+pub fn parse_symmetric_definition(s: &str) -> Result<SymmetricDefinition, String> {
     match s.to_lowercase().as_str() {
         "aes128cfb" | "aes-128-cfb" => Ok(SymmetricDefinition::AES_128_CFB),
         "aes256cfb" | "aes-256-cfb" => Ok(SymmetricDefinition::AES_256_CFB),
@@ -481,9 +497,9 @@ pub fn parse_symmetric_definition(s: &str) -> anyhow::Result<SymmetricDefinition
             hashing_algorithm: HashingAlgorithm::Sha256,
         }),
         "null" => Ok(SymmetricDefinition::Null),
-        _ => bail!(
+        _ => Err(format!(
             "unsupported symmetric definition: {s} (supported: aes128cfb, aes256cfb, xor, null)"
-        ),
+        )),
     }
 }
 
@@ -497,27 +513,33 @@ pub fn parse_symmetric_definition(s: &str) -> anyhow::Result<SymmetricDefinition
 /// - `hex:<hex_bytes>` — hex-encoded byte string
 /// - `file:<path>`     — read raw bytes from file
 /// - `<string>`        — plain UTF-8 string (fallback)
-pub fn parse_bytes(value: &str) -> anyhow::Result<Vec<u8>> {
+///
+/// Intended for use as a clap `value_parser`.
+pub fn parse_bytes(value: &str) -> Result<Vec<u8>, String> {
     if let Some(hex_str) = value.strip_prefix("hex:") {
-        hex::decode(hex_str).context("invalid hex data")
+        hex::decode(hex_str).map_err(|e| format!("invalid hex data: {e}"))
     } else if let Some(path) = value.strip_prefix("file:") {
         std::fs::read(std::path::Path::new(path))
-            .with_context(|| format!("reading data from '{path}'"))
+            .map_err(|e| format!("reading data from '{path}': {e}"))
     } else {
         Ok(value.as_bytes().to_vec())
     }
 }
 
 /// Parse sensitive data from a CLI string.
-pub fn parse_sensitive_data(value: &str) -> anyhow::Result<SensitiveData> {
+///
+/// Intended for use as a clap `value_parser`.
+pub fn parse_sensitive_data(value: &str) -> Result<SensitiveData, String> {
     let bytes = parse_bytes(value)?;
-    SensitiveData::try_from(bytes).map_err(|e| anyhow::anyhow!("data too large: {e}"))
+    SensitiveData::try_from(bytes).map_err(|e| format!("data too large: {e}"))
 }
 
 /// Parse a Data buffer from a CLI string (for outside_info etc.).
-pub fn parse_data(value: &str) -> anyhow::Result<Data> {
+///
+/// Intended for use as a clap `value_parser`.
+pub fn parse_data(value: &str) -> Result<Data, String> {
     let bytes = parse_bytes(value)?;
-    Data::try_from(bytes).map_err(|e| anyhow::anyhow!("data too large: {e}"))
+    Data::try_from(bytes).map_err(|e| format!("data too large: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -525,7 +547,9 @@ pub fn parse_data(value: &str) -> anyhow::Result<Data> {
 // ---------------------------------------------------------------------------
 
 /// Parse a TPM2_EO_* comparison operation name to its `u16` constant.
-pub fn parse_tpm2_operation(s: &str) -> anyhow::Result<u16> {
+///
+/// Intended for use as a clap `value_parser`.
+pub fn parse_tpm2_operation(s: &str) -> Result<u16, String> {
     use tss_esapi::constants::tss::*;
     match s.to_lowercase().as_str() {
         "eq" => Ok(TPM2_EO_EQ),
@@ -540,6 +564,8 @@ pub fn parse_tpm2_operation(s: &str) -> anyhow::Result<u16> {
         "ule" => Ok(TPM2_EO_UNSIGNED_LE),
         "bs" => Ok(TPM2_EO_BITSET),
         "bc" => Ok(TPM2_EO_BITCLEAR),
-        _ => bail!("unknown operation: {s}; expected eq/neq/sgt/ugt/slt/ult/sge/uge/sle/ule/bs/bc"),
+        _ => Err(format!(
+            "unknown operation: {s}; expected eq/neq/sgt/ugt/slt/ult/sge/uge/sle/ule/bs/bc"
+        )),
     }
 }

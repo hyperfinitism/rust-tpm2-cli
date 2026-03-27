@@ -6,7 +6,8 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::structures::{InitialValue, MaxBuffer};
+use tss_esapi::interface_types::algorithm::SymmetricMode;
+use tss_esapi::structures::{Auth, InitialValue, MaxBuffer};
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -26,12 +27,12 @@ pub struct DecryptCmd {
     pub key_context: ContextSource,
 
     /// Authorization value for the key
-    #[arg(short = 'p', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Cipher mode (cfb, cbc, ecb, ofb, ctr)
-    #[arg(short = 'G', long = "mode", default_value = "cfb")]
-    pub mode: String,
+    #[arg(short = 'G', long = "mode", default_value = "cfb", value_parser = parse::parse_symmetric_mode)]
+    pub mode: SymmetricMode,
 
     /// Initialization vector input file (default: all zeros)
     #[arg(short = 'i', long = "iv")]
@@ -59,11 +60,9 @@ impl DecryptCmd {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
         let key_handle = load_key_from_source(&mut ctx, &self.key_context)?;
-        let mode = parse::parse_symmetric_mode(&self.mode)?;
 
-        if let Some(ref auth_str) = self.auth {
-            let auth = parse::parse_auth(auth_str)?;
-            ctx.tr_set_auth(key_handle.into(), auth)
+        if let Some(ref auth) = self.auth {
+            ctx.tr_set_auth(key_handle.into(), auth.clone())
                 .context("tr_set_auth failed")?;
         }
 
@@ -75,7 +74,7 @@ impl DecryptCmd {
 
         let session_path = self.session.as_deref();
         let (plaintext, iv_out) = execute_with_optional_session(&mut ctx, session_path, |ctx| {
-            ctx.encrypt_decrypt_2(key_handle, true, mode, data.clone(), iv_in.clone())
+            ctx.encrypt_decrypt_2(key_handle, true, self.mode, data.clone(), iv_in.clone())
         })
         .context("TPM2_EncryptDecrypt2 (decrypt) failed")?;
 

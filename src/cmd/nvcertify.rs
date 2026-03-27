@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use log::info;
 use tss_esapi::constants::tss::*;
-use tss_esapi::structures::Data;
+use tss_esapi::structures::{Auth, Data};
 use tss_esapi::tss2_esys::*;
 
 use crate::cli::GlobalOpts;
@@ -31,12 +31,12 @@ pub struct NvCertifyCmd {
     pub nv_auth_hierarchy: NvAuthEntity,
 
     /// Auth value for the signing key
-    #[arg(short = 'P', long = "signing-key-auth")]
-    pub signing_key_auth: Option<String>,
+    #[arg(short = 'P', long = "signing-key-auth", value_parser = parse::parse_auth)]
+    pub signing_key_auth: Option<Auth>,
 
     /// Auth value for the NV index
-    #[arg(short = 'p', long = "nv-auth")]
-    pub nv_auth: Option<String>,
+    #[arg(short = 'p', long = "nv-auth", value_parser = parse::parse_auth)]
+    pub nv_auth: Option<Auth>,
 
     /// Hash algorithm for the signature
     #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
@@ -72,12 +72,10 @@ impl NvCertifyCmd {
 
         let auth_handle = RawEsysContext::resolve_nv_auth_entity(self.nv_auth_hierarchy, nv_handle);
 
-        if let Some(ref auth_str) = self.signing_key_auth {
-            let auth = parse::parse_auth(auth_str)?;
+        if let Some(ref auth) = self.signing_key_auth {
             raw.set_auth(sign_handle, auth.as_bytes())?;
         }
-        if let Some(ref auth_str) = self.nv_auth {
-            let auth = parse::parse_auth(auth_str)?;
+        if let Some(ref auth) = self.nv_auth {
             raw.set_auth(auth_handle, auth.as_bytes())?;
         }
 

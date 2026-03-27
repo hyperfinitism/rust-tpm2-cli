@@ -9,7 +9,7 @@ use tss_esapi::constants::SessionType;
 use tss_esapi::handles::ObjectHandle;
 use tss_esapi::interface_types::reserved_handles::HierarchyAuth;
 use tss_esapi::interface_types::session_handles::AuthSession;
-use tss_esapi::structures::{EncryptedSecret, IdObject};
+use tss_esapi::structures::{Auth, EncryptedSecret, IdObject};
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -33,8 +33,8 @@ pub struct ActivateCredentialCmd {
     pub credential_key_context: ContextSource,
 
     /// Auth value for the credentialed key
-    #[arg(short = 'p', long = "credentialedkey-auth")]
-    pub credentialed_auth: Option<String>,
+    #[arg(short = 'p', long = "credentialedkey-auth", value_parser = parse::parse_auth)]
+    pub credentialed_auth: Option<Auth>,
 
     /// Auth for the credential key (EK).
     ///
@@ -61,9 +61,8 @@ impl ActivateCredentialCmd {
         let key_handle = load_key_from_source(&mut ctx, &self.credential_key_context)?;
 
         // Set auth on the credentialed key (AK) if provided.
-        if let Some(ref a) = self.credentialed_auth {
-            let auth = parse::parse_auth(a)?;
-            ctx.tr_set_auth(activate_handle.into(), auth)
+        if let Some(ref auth) = self.credentialed_auth {
+            ctx.tr_set_auth(activate_handle.into(), auth.clone())
                 .context("failed to set credentialed key auth")?;
         }
 

@@ -6,6 +6,8 @@ use anyhow::Context;
 use clap::Parser;
 use log::info;
 
+use tss_esapi::structures::Auth;
+
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_object_from_source};
@@ -31,12 +33,12 @@ pub struct ChangeAuthCmd {
     pub parent_context: Option<ContextSource>,
 
     /// Current auth value for the object/hierarchy
-    #[arg(short = 'p', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// New auth value
-    #[arg(short = 'r', long = "new-auth")]
-    pub new_auth: String,
+    #[arg(short = 'r', long = "new-auth", value_parser = parse::parse_auth)]
+    pub new_auth: Auth,
 
     /// Output file for the new private portion (for loaded objects)
     #[arg(short = 'o', long = "output")]
@@ -51,18 +53,15 @@ impl ChangeAuthCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let new_auth = parse::parse_auth(&self.new_auth)?;
-
         if let Some(auth_handle) = self.object_context_hierarchy {
-            if let Some(ref auth_str) = self.auth {
-                let auth = parse::parse_auth(auth_str)?;
-                ctx.tr_set_auth(auth_handle.into(), auth)
+            if let Some(ref auth) = self.auth {
+                ctx.tr_set_auth(auth_handle.into(), auth.clone())
                     .context("tr_set_auth failed")?;
             }
 
             let session_path = self.session.as_deref();
             execute_with_optional_session(&mut ctx, session_path, |ctx| {
-                ctx.hierarchy_change_auth(auth_handle, new_auth.clone())
+                ctx.hierarchy_change_auth(auth_handle, self.new_auth.clone())
             })
             .context("TPM2_HierarchyChangeAuth failed")?;
 
@@ -77,15 +76,14 @@ impl ChangeAuthCmd {
             })?;
             let parent_handle = load_object_from_source(&mut ctx, parent_src)?;
 
-            if let Some(ref auth_str) = self.auth {
-                let auth = parse::parse_auth(auth_str)?;
-                ctx.tr_set_auth(object_handle, auth)
+            if let Some(ref auth) = self.auth {
+                ctx.tr_set_auth(object_handle, auth.clone())
                     .context("tr_set_auth failed")?;
             }
 
             let session_path = self.session.as_deref();
             let new_private = execute_with_optional_session(&mut ctx, session_path, |ctx| {
-                ctx.object_change_auth(object_handle, parent_handle, new_auth.clone())
+                ctx.object_change_auth(object_handle, parent_handle, self.new_auth.clone())
             })
             .context("TPM2_ObjectChangeAuth failed")?;
 

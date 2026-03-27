@@ -6,9 +6,11 @@ use anyhow::Context;
 use clap::Parser;
 use log::info;
 
+use tss_esapi::structures::Auth;
+
 use crate::cli::GlobalOpts;
 use crate::handle::ContextSource;
-use crate::parse::parse_context_source;
+use crate::parse::{self, parse_context_source};
 use crate::raw_esys;
 
 /// Perform the first part of an ECC anonymous signing operation.
@@ -23,8 +25,8 @@ pub struct CommitCmd {
     pub context: ContextSource,
 
     /// Auth value for the signing key
-    #[arg(short = 'p', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// ECC point P1 input file (optional)
     #[arg(long = "eccpoint-P")]
@@ -64,7 +66,7 @@ impl CommitCmd {
         let result = raw_esys::commit(
             global.tcti.as_deref(),
             &self.context,
-            self.auth.as_deref(),
+            self.auth.as_ref(),
             p1.as_deref(),
             s2.as_deref(),
             y2.as_deref(),

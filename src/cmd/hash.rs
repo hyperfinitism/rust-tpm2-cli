@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
 use tss_esapi::structures::MaxBuffer;
 use tss_esapi::tss2_esys::TPMT_TK_HASHCHECK;
 
@@ -22,8 +23,8 @@ use crate::parse;
 #[derive(Parser)]
 pub struct HashCmd {
     /// Hash algorithm (sha1, sha256, sha384, sha512)
-    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
-    pub algorithm: String,
+    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
+    pub algorithm: HashingAlgorithm,
 
     /// Hierarchy for the ticket (owner, endorsement, platform, null)
     #[arg(short = 'C', long = "hierarchy", default_value = "owner", value_parser = parse::parse_hierarchy)]
@@ -49,7 +50,7 @@ impl HashCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let alg = parse::parse_hashing_algorithm(&self.algorithm)?;
+        let alg = self.algorithm;
 
         let data = read_input(&self.input_file)?;
         let buffer =

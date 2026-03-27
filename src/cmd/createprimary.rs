@@ -10,10 +10,12 @@ use tss_esapi::interface_types::algorithm::PublicAlgorithm;
 use tss_esapi::interface_types::ecc::EccCurve;
 use tss_esapi::interface_types::key_bits::RsaKeyBits;
 use tss_esapi::structures::{
-    EccScheme, KeyDerivationFunctionScheme, Public, PublicBuilder, PublicEccParametersBuilder,
-    PublicRsaParametersBuilder, RsaExponent, RsaScheme, SymmetricDefinitionObject,
+    Auth, Data, EccScheme, KeyDerivationFunctionScheme, PcrSelectionList, Public, PublicBuilder,
+    PublicEccParametersBuilder, PublicRsaParametersBuilder, RsaExponent, RsaScheme,
+    SymmetricDefinitionObject,
 };
 
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
 use tss_esapi::interface_types::reserved_handles::Hierarchy;
 
 use crate::cli::GlobalOpts;
@@ -33,12 +35,12 @@ pub struct CreatePrimaryCmd {
     pub algorithm: String,
 
     /// Hash algorithm (sha1, sha256, sha384, sha512)
-    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
-    pub hash_algorithm: String,
+    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
+    pub hash_algorithm: HashingAlgorithm,
 
     /// Authorization value for the key
-    #[arg(short = 'p', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Output context file for the created primary key
     #[arg(short = 'c', long = "context")]
@@ -49,16 +51,16 @@ pub struct CreatePrimaryCmd {
     pub key_size: u16,
 
     /// ECC curve (nistp256, nistp384, nistp521, sm2p256, etc.)
-    #[arg(long = "ecc-curve", default_value = "nistp256")]
-    pub ecc_curve: String,
+    #[arg(long = "ecc-curve", default_value = "nistp256", value_parser = parse::parse_ecc_curve)]
+    pub ecc_curve: EccCurve,
 
     /// Outside info data (hex:<hex> or file:<path>)
-    #[arg(short = 'q', long = "outside-info")]
-    pub outside_info: Option<String>,
+    #[arg(short = 'q', long = "outside-info", value_parser = parse::parse_data)]
+    pub outside_info: Option<Data>,
 
     /// Creation PCR selection (e.g. sha256:0,1,2)
-    #[arg(short = 'l', long = "creation-pcr")]
-    pub creation_pcr: Option<String>,
+    #[arg(short = 'l', long = "creation-pcr", value_parser = parse::parse_pcr_selection)]
+    pub creation_pcr: Option<PcrSelectionList>,
 
     /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
@@ -69,34 +71,22 @@ impl CreatePrimaryCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
-        let ecc_curve = parse::parse_ecc_curve(&self.ecc_curve)?;
-        let public = build_public(&self.algorithm, hash_alg, self.key_size, ecc_curve)?;
-
-        let auth = match &self.auth {
-            Some(a) => Some(parse::parse_auth(a)?),
-            None => None,
-        };
-
-        let outside_info = match &self.outside_info {
-            Some(s) => Some(parse::parse_data(s)?),
-            None => None,
-        };
-
-        let creation_pcr = match &self.creation_pcr {
-            Some(s) => Some(parse::parse_pcr_selection(s)?),
-            None => None,
-        };
+        let public = build_public(
+            &self.algorithm,
+            self.hash_algorithm,
+            self.key_size,
+            self.ecc_curve,
+        )?;
 
         let session_path = self.session.as_deref();
         let result = execute_with_optional_session(&mut ctx, session_path, |ctx| {
             ctx.create_primary(
                 self.hierarchy,
                 public.clone(),
-                auth.clone(),
+                self.auth.clone(),
                 None, // initial_data
-                outside_info.clone(),
-                creation_pcr.clone(),
+                self.outside_info.clone(),
+                self.creation_pcr.clone(),
             )
         })
         .context("TPM2_CreatePrimary failed")?;

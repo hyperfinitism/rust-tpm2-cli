@@ -4,6 +4,8 @@ use clap::Parser;
 use log::info;
 use tss_esapi::tss2_esys::*;
 
+use tss_esapi::structures::Auth;
+
 use crate::cli::GlobalOpts;
 use crate::parse;
 use crate::raw_esys::RawEsysContext;
@@ -14,8 +16,8 @@ use crate::raw_esys::RawEsysContext;
 #[derive(Parser)]
 pub struct DictionaryLockoutCmd {
     /// Auth value for the lockout hierarchy
-    #[arg(short = 'p', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Reset the DA lockout counter
     #[arg(short = 'c', long = "clear-lockout")]
@@ -42,8 +44,7 @@ impl DictionaryLockoutCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
 
-        if let Some(ref auth_str) = self.auth {
-            let auth = parse::parse_auth(auth_str)?;
+        if let Some(ref auth) = self.auth {
             raw.set_auth(ESYS_TR_RH_LOCKOUT, auth.as_bytes())?;
         }
 

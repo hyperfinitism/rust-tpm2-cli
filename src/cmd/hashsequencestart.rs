@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -18,8 +19,8 @@ use crate::parse;
 #[derive(Parser)]
 pub struct HashSequenceStartCmd {
     /// Hash algorithm (default: sha256)
-    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
-    pub hash_algorithm: String,
+    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
+    pub hash_algorithm: HashingAlgorithm,
 
     /// Output file for the sequence context
     #[arg(short = 'o', long = "output")]
@@ -30,7 +31,7 @@ impl HashSequenceStartCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
+        let hash_alg = self.hash_algorithm;
 
         let seq_handle = ctx
             .hash_sequence_start(hash_alg, None)

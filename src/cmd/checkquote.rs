@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use anyhow::{Context, bail};
 use clap::Parser;
 use log::info;
-use tss_esapi::structures::{Attest, AttestInfo, MaxBuffer, Signature};
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
+use tss_esapi::structures::{Attest, AttestInfo, MaxBuffer, PcrSelectionList, Signature};
 use tss_esapi::traits::UnMarshall;
 
 use crate::cli::GlobalOpts;
@@ -33,16 +34,16 @@ pub struct CheckQuoteCmd {
     pub signature: PathBuf,
 
     /// Hash algorithm used to digest the message
-    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
-    pub hash_algorithm: String,
+    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
+    pub hash_algorithm: HashingAlgorithm,
 
     /// PCR values file for additional verification
     #[arg(short = 'f', long = "pcr")]
     pub pcr_file: Option<PathBuf>,
 
     /// PCR selection list (e.g. sha256:0,1,2)
-    #[arg(short = 'l', long = "pcr-list")]
-    pub pcr_list: Option<String>,
+    #[arg(short = 'l', long = "pcr-list", value_parser = parse::parse_pcr_selection)]
+    pub pcr_list: Option<PcrSelectionList>,
 
     /// Qualification data (hex:<hex_bytes> or file:<path>)
     #[arg(short = 'q', long = "qualification", value_parser = parse::parse_qualification)]
@@ -54,7 +55,7 @@ impl CheckQuoteCmd {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
         let key_handle = load_key_from_source(&mut ctx, &self.public)?;
-        let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
+        let hash_alg = self.hash_algorithm;
 
         // ---------------------------------------------------------------
         // 1. Read and hash the quote message
@@ -154,8 +155,7 @@ impl CheckQuoteCmd {
         // ---------------------------------------------------------------
         // 6. If a PCR selection list was supplied, compare with the quote
         // ---------------------------------------------------------------
-        if let Some(ref pcr_list_str) = self.pcr_list {
-            let expected_selection = parse::parse_pcr_selection(pcr_list_str)?;
+        if let Some(ref expected_selection) = self.pcr_list {
             let quote_selection = quote_info.pcr_selection();
 
             let expected_dbg = format!("{expected_selection:?}");

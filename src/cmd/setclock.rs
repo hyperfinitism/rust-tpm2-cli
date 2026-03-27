@@ -4,6 +4,8 @@ use clap::Parser;
 use log::info;
 use tss_esapi::tss2_esys::*;
 
+use tss_esapi::structures::Auth;
+
 use crate::cli::GlobalOpts;
 use crate::parse;
 use crate::raw_esys::RawEsysContext;
@@ -18,8 +20,8 @@ pub struct SetClockCmd {
     pub hierarchy: u32,
 
     /// Auth value
-    #[arg(short = 'p', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// New clock value (milliseconds)
     #[arg()]
@@ -31,8 +33,7 @@ impl SetClockCmd {
         let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
         let auth_handle = self.hierarchy;
 
-        if let Some(ref auth_str) = self.auth {
-            let auth = parse::parse_auth(auth_str)?;
+        if let Some(ref auth) = self.auth {
             raw.set_auth(auth_handle, auth.as_bytes())?;
         }
 

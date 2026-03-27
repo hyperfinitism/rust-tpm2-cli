@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::{Context, bail};
 use clap::Parser;
 use log::info;
-use tss_esapi::structures::{EccParameter, EccPoint};
+use tss_esapi::structures::{Auth, EccParameter, EccPoint};
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -24,8 +24,8 @@ pub struct EcdhZgenCmd {
     pub key_context: ContextSource,
 
     /// Auth value for the key
-    #[arg(short = 'p', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Input file containing the public point (raw x||y bytes)
     #[arg(short = 'u', long = "public")]
@@ -46,9 +46,8 @@ impl EcdhZgenCmd {
 
         let key_handle = load_key_from_source(&mut ctx, &self.key_context)?;
 
-        if let Some(ref auth_str) = self.auth {
-            let auth = parse::parse_auth(auth_str)?;
-            ctx.tr_set_auth(key_handle.into(), auth)
+        if let Some(ref auth) = self.auth {
+            ctx.tr_set_auth(key_handle.into(), auth.clone())
                 .context("tr_set_auth failed")?;
         }
 

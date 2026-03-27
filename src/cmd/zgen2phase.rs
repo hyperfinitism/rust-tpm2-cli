@@ -7,6 +7,8 @@ use log::info;
 use tss_esapi::constants::tss::*;
 use tss_esapi::tss2_esys::*;
 
+use tss_esapi::structures::Auth;
+
 use crate::cli::GlobalOpts;
 use crate::handle::ContextSource;
 use crate::parse::{self, parse_context_source};
@@ -22,8 +24,8 @@ pub struct Zgen2PhaseCmd {
     pub key_context: ContextSource,
 
     /// Auth value for the key
-    #[arg(short = 'p', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Other party's static public point file (raw x||y bytes)
     #[arg(long = "static-public")]
@@ -55,8 +57,7 @@ impl Zgen2PhaseCmd {
         let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
         let key_handle = raw.resolve_handle_from_source(&self.key_context)?;
 
-        if let Some(ref auth_str) = self.auth {
-            let auth = parse::parse_auth(auth_str)?;
+        if let Some(ref auth) = self.auth {
             raw.set_auth(key_handle, auth.as_bytes())?;
         }
 

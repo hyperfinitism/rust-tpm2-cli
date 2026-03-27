@@ -13,7 +13,7 @@ use tss_esapi::interface_types::key_bits::RsaKeyBits;
 use tss_esapi::interface_types::reserved_handles::HierarchyAuth;
 use tss_esapi::interface_types::session_handles::AuthSession;
 use tss_esapi::structures::{
-    EccScheme, HashScheme, KeyDerivationFunctionScheme, Public, PublicBuilder,
+    Auth, EccScheme, HashScheme, KeyDerivationFunctionScheme, Public, PublicBuilder,
     PublicEccParametersBuilder, PublicRsaParametersBuilder, RsaExponent, RsaScheme,
     SymmetricDefinitionObject,
 };
@@ -45,16 +45,16 @@ pub struct CreateAkCmd {
     pub algorithm: String,
 
     /// Hash algorithm (sha1, sha256, sha384, sha512)
-    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
-    pub hash_algorithm: String,
+    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
+    pub hash_algorithm: HashingAlgorithm,
 
     /// Endorsement hierarchy auth value
-    #[arg(short = 'P', long = "eh-auth")]
-    pub eh_auth: Option<String>,
+    #[arg(short = 'P', long = "eh-auth", value_parser = parse::parse_auth)]
+    pub eh_auth: Option<Auth>,
 
     /// Auth value for the attestation key
-    #[arg(short = 'p', long = "ak-auth")]
-    pub ak_auth: Option<String>,
+    #[arg(short = 'p', long = "ak-auth", value_parser = parse::parse_auth)]
+    pub ak_auth: Option<Auth>,
 
     /// Output file for AK public portion (TPM2B_PUBLIC, marshaled binary)
     #[arg(short = 'u', long = "public")]
@@ -73,21 +73,14 @@ impl CreateAkCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
-        let ak_template = build_ak_public(&self.algorithm, hash_alg)?;
+        let ak_template = build_ak_public(&self.algorithm, self.hash_algorithm)?;
 
         let ek_handle = load_key_from_source(&mut ctx, &self.ek_context)?;
 
-        let ak_auth = match &self.ak_auth {
-            Some(a) => Some(parse::parse_auth(a)?),
-            None => None,
-        };
-
         // Set endorsement hierarchy auth if provided.
-        if let Some(ref a) = self.eh_auth {
-            let auth = parse::parse_auth(a)?;
+        if let Some(ref auth) = self.eh_auth {
             let eh_obj: ObjectHandle = HierarchyAuth::Endorsement.into();
-            ctx.tr_set_auth(eh_obj, auth)
+            ctx.tr_set_auth(eh_obj, auth.clone())
                 .context("failed to set endorsement hierarchy auth")?;
         }
 
@@ -98,7 +91,7 @@ impl CreateAkCmd {
             .create(
                 ek_handle,
                 ak_template.clone(),
-                ak_auth.clone(),
+                self.ak_auth.clone(),
                 None,
                 None,
                 None,

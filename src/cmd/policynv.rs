@@ -7,6 +7,8 @@ use clap::Parser;
 use log::info;
 use tss_esapi::tss2_esys::*;
 
+use tss_esapi::structures::Auth;
+
 use crate::cli::GlobalOpts;
 use crate::parse::{self, NvAuthEntity};
 use crate::raw_esys::RawEsysContext;
@@ -29,8 +31,8 @@ pub struct PolicyNvCmd {
     pub hierarchy: NvAuthEntity,
 
     /// Auth value for the hierarchy
-    #[arg(short = 'P', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'P', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Operand B (hex bytes for comparison)
     #[arg(long = "operand-b")]
@@ -41,8 +43,8 @@ pub struct PolicyNvCmd {
     pub offset: u16,
 
     /// Operation (eq, neq, sgt, ugt, slt, ult, sge, uge, sle, ule, bs, bc)
-    #[arg(long = "operation", default_value = "eq")]
-    pub operation: String,
+    #[arg(long = "operation", default_value = "eq", value_parser = parse::parse_tpm2_operation)]
+    pub operation: u16,
 }
 
 impl PolicyNvCmd {
@@ -59,17 +61,14 @@ impl PolicyNvCmd {
 
         let auth_handle = RawEsysContext::resolve_nv_auth_entity(self.hierarchy, nv_handle);
 
-        if let Some(ref auth_str) = self.auth {
-            let a = parse::parse_auth(auth_str)?;
-            raw.set_auth(auth_handle, a.as_bytes())?;
+        if let Some(ref auth) = self.auth {
+            raw.set_auth(auth_handle, auth.as_bytes())?;
         }
 
         let operand_bytes = hex::decode(&self.operand_b).context("invalid operand-b hex")?;
         let mut operand = TPM2B_OPERAND::default();
         operand.size = operand_bytes.len() as u16;
         operand.buffer[..operand_bytes.len()].copy_from_slice(&operand_bytes);
-
-        let operation = parse::parse_tpm2_operation(&self.operation)?;
 
         unsafe {
             let rc = Esys_PolicyNV(
@@ -82,7 +81,7 @@ impl PolicyNvCmd {
                 ESYS_TR_NONE,
                 &operand,
                 self.offset,
-                operation,
+                self.operation,
             );
             if rc != 0 {
                 bail!("Esys_PolicyNV failed: 0x{rc:08x}");

@@ -6,6 +6,8 @@ use anyhow::Context;
 use clap::Parser;
 use log::info;
 
+use tss_esapi::structures::Auth;
+
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_object_from_source};
@@ -21,8 +23,8 @@ pub struct UnsealCmd {
     pub context: ContextSource,
 
     /// Auth value for the sealed object
-    #[arg(short = 'p', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Output file for the unsealed data
     #[arg(short = 'o', long)]
@@ -39,9 +41,8 @@ impl UnsealCmd {
 
         let obj_handle = load_object_from_source(&mut ctx, &self.context)?;
 
-        if let Some(ref auth_str) = self.auth {
-            let auth = parse::parse_auth(auth_str)?;
-            ctx.tr_set_auth(obj_handle, auth)
+        if let Some(ref auth) = self.auth {
+            ctx.tr_set_auth(obj_handle, auth.clone())
                 .context("failed to set sealed object auth")?;
         }
 

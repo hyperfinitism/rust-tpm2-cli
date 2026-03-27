@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use log::info;
 use tss_esapi::constants::tss::*;
-use tss_esapi::structures::Data;
+use tss_esapi::structures::{Auth, Data};
 use tss_esapi::tss2_esys::*;
 
 use crate::cli::GlobalOpts;
@@ -31,12 +31,12 @@ pub struct GetSessionAuditDigestCmd {
     pub session: PathBuf,
 
     /// Auth for the signing key
-    #[arg(short = 'P', long = "signing-key-auth")]
-    pub signing_key_auth: Option<String>,
+    #[arg(short = 'P', long = "signing-key-auth", value_parser = parse::parse_auth)]
+    pub signing_key_auth: Option<Auth>,
 
     /// Auth for the privacy admin hierarchy
-    #[arg(short = 'p', long = "hierarchy-auth")]
-    pub hierarchy_auth: Option<String>,
+    #[arg(short = 'p', long = "hierarchy-auth", value_parser = parse::parse_auth)]
+    pub hierarchy_auth: Option<Auth>,
 
     /// Qualifying data (hex:<hex_bytes> or file:<path>)
     #[arg(short = 'q', long = "qualification", value_parser = crate::parse::parse_qualification)]
@@ -64,12 +64,10 @@ impl GetSessionAuditDigestCmd {
                 .ok_or_else(|| anyhow::anyhow!("invalid session path"))?,
         )?;
 
-        if let Some(ref auth_str) = self.hierarchy_auth {
-            let auth = parse::parse_auth(auth_str)?;
+        if let Some(ref auth) = self.hierarchy_auth {
             raw.set_auth(privacy_handle, auth.as_bytes())?;
         }
-        if let Some(ref auth_str) = self.signing_key_auth {
-            let auth = parse::parse_auth(auth_str)?;
+        if let Some(ref auth) = self.signing_key_auth {
             raw.set_auth(sign_handle, auth.as_bytes())?;
         }
 

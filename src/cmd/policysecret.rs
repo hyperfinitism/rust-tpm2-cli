@@ -9,7 +9,7 @@ use log::info;
 use tss_esapi::constants::SessionType;
 use tss_esapi::handles::{AuthHandle, ObjectHandle, SessionHandle};
 use tss_esapi::interface_types::session_handles::AuthSession;
-use tss_esapi::structures::{Digest, Nonce};
+use tss_esapi::structures::{Auth, Digest, Nonce, SensitiveData};
 use tss_esapi::tss2_esys::TPMT_TK_AUTH;
 
 use crate::cli::GlobalOpts;
@@ -41,20 +41,20 @@ pub struct PolicySecretCmd {
     pub policy: Option<PathBuf>,
 
     /// Authorization value for the object
-    #[arg(short = 'p', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Nonce TPM value (hex:<hex> or file:<path>)
-    #[arg(long = "nonce")]
-    pub nonce: Option<String>,
+    #[arg(long = "nonce", value_parser = parse::parse_sensitive_data)]
+    pub nonce: Option<SensitiveData>,
 
     /// CP hash value (hex:<hex> or file:<path>)
-    #[arg(long = "cp-hash")]
-    pub cp_hash: Option<String>,
+    #[arg(long = "cp-hash", value_parser = parse::parse_sensitive_data)]
+    pub cp_hash: Option<SensitiveData>,
 
     /// Policy reference value (hex:<hex> or file:<path>)
-    #[arg(long = "policy-ref")]
-    pub policy_ref: Option<String>,
+    #[arg(long = "policy-ref", value_parser = parse::parse_sensitive_data)]
+    pub policy_ref: Option<SensitiveData>,
 
     /// Expiration timeout in seconds (0 for no expiration)
     #[arg(short = 'x', long = "expiration")]
@@ -89,23 +89,22 @@ impl PolicySecretCmd {
                 })?;
                 let obj = load_object_from_source(&mut ctx, src)?;
                 // Set the auth value on the object if provided.
-                if let Some(ref auth_str) = self.auth {
-                    let auth = parse::parse_auth(auth_str)?;
-                    ctx.tr_set_auth(obj, auth).context("tr_set_auth failed")?;
+                if let Some(ref auth) = self.auth {
+                    ctx.tr_set_auth(obj, auth.clone())
+                        .context("tr_set_auth failed")?;
                 }
                 AuthHandle::from(obj)
             }
         };
 
         // For hierarchy handles, set auth directly if supplied.
-        if let Some(ref auth_str) = self.auth {
+        if let Some(ref auth) = self.auth {
             match auth_handle {
                 AuthHandle::Owner
                 | AuthHandle::Endorsement
                 | AuthHandle::Platform
                 | AuthHandle::Lockout => {
-                    let auth = parse::parse_auth(auth_str)?;
-                    ctx.tr_set_auth(auth_handle.into(), auth)
+                    ctx.tr_set_auth(auth_handle.into(), auth.clone())
                         .context("tr_set_auth failed")?;
                 }
                 _ => {} // already handled above
@@ -114,29 +113,20 @@ impl PolicySecretCmd {
 
         // Parse optional parameters.
         let nonce_tpm = match &self.nonce {
-            Some(s) => {
-                let data = parse::parse_sensitive_data(s)?;
-                Nonce::try_from(data.as_bytes().to_vec())
-                    .map_err(|e| anyhow::anyhow!("invalid nonce: {e}"))?
-            }
+            Some(data) => Nonce::try_from(data.as_bytes().to_vec())
+                .map_err(|e| anyhow::anyhow!("invalid nonce: {e}"))?,
             None => Default::default(),
         };
 
         let cp_hash_a = match &self.cp_hash {
-            Some(s) => {
-                let data = parse::parse_sensitive_data(s)?;
-                Digest::try_from(data.as_bytes().to_vec())
-                    .map_err(|e| anyhow::anyhow!("invalid cp-hash: {e}"))?
-            }
+            Some(data) => Digest::try_from(data.as_bytes().to_vec())
+                .map_err(|e| anyhow::anyhow!("invalid cp-hash: {e}"))?,
             None => Default::default(),
         };
 
         let policy_ref = match &self.policy_ref {
-            Some(s) => {
-                let data = parse::parse_sensitive_data(s)?;
-                Nonce::try_from(data.as_bytes().to_vec())
-                    .map_err(|e| anyhow::anyhow!("invalid policy-ref: {e}"))?
-            }
+            Some(data) => Nonce::try_from(data.as_bytes().to_vec())
+                .map_err(|e| anyhow::anyhow!("invalid policy-ref: {e}"))?,
             None => Default::default(),
         };
 

@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::structures::Data;
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
+use tss_esapi::structures::{Auth, Data};
 use tss_esapi::traits::Marshall;
 
 use crate::cli::GlobalOpts;
@@ -32,16 +33,16 @@ pub struct CertifyCmd {
     pub signing_context: ContextSource,
 
     /// Auth value for the certified object
-    #[arg(short = 'P', long = "certifiedkey-auth")]
-    pub certified_auth: Option<String>,
+    #[arg(short = 'P', long = "certifiedkey-auth", value_parser = parse::parse_auth)]
+    pub certified_auth: Option<Auth>,
 
     /// Auth value for the signing key
-    #[arg(short = 'p', long = "signingkey-auth")]
-    pub signing_auth: Option<String>,
+    #[arg(short = 'p', long = "signingkey-auth", value_parser = parse::parse_auth)]
+    pub signing_auth: Option<Auth>,
 
     /// Hash algorithm for signing
-    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
-    pub hash_algorithm: String,
+    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
+    pub hash_algorithm: HashingAlgorithm,
 
     /// Signature scheme (rsassa, rsapss, ecdsa, null)
     #[arg(long = "scheme", default_value = "null")]
@@ -70,17 +71,15 @@ impl CertifyCmd {
 
         let object_handle = load_object_from_source(&mut ctx, &self.certified_context)?;
         let signing_key = load_key_from_source(&mut ctx, &self.signing_context)?;
-        let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
-        let scheme = parse::parse_signature_scheme(&self.scheme, hash_alg)?;
+        let scheme = parse::parse_signature_scheme(&self.scheme, self.hash_algorithm)
+            .map_err(anyhow::Error::msg)?;
 
-        if let Some(ref auth_str) = self.certified_auth {
-            let auth = parse::parse_auth(auth_str)?;
-            ctx.tr_set_auth(object_handle, auth)
+        if let Some(ref auth) = self.certified_auth {
+            ctx.tr_set_auth(object_handle, auth.clone())
                 .context("failed to set certified key auth")?;
         }
-        if let Some(ref auth_str) = self.signing_auth {
-            let auth = parse::parse_auth(auth_str)?;
-            ctx.tr_set_auth(signing_key.into(), auth)
+        if let Some(ref auth) = self.signing_auth {
+            ctx.tr_set_auth(signing_key.into(), auth.clone())
                 .context("failed to set signing key auth")?;
         }
 

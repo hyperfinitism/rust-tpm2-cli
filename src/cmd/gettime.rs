@@ -6,8 +6,9 @@ use anyhow::Context;
 use clap::Parser;
 use log::info;
 use tss_esapi::constants::SessionType;
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
 use tss_esapi::interface_types::session_handles::AuthSession;
-use tss_esapi::structures::Data;
+use tss_esapi::structures::{Auth, Data};
 use tss_esapi::traits::Marshall;
 
 use crate::cli::GlobalOpts;
@@ -27,12 +28,12 @@ pub struct GetTimeCmd {
     pub context: ContextSource,
 
     /// Auth value for the signing key
-    #[arg(short = 'p', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Hash algorithm for signing
-    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
-    pub hash_algorithm: String,
+    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
+    pub hash_algorithm: HashingAlgorithm,
 
     /// Signature scheme (rsassa, rsapss, ecdsa, null)
     #[arg(long = "scheme", default_value = "null")]
@@ -60,12 +61,11 @@ impl GetTimeCmd {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
         let signing_key = load_key_from_source(&mut ctx, &self.context)?;
-        let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
-        let scheme = parse::parse_signature_scheme(&self.scheme, hash_alg)?;
+        let scheme = parse::parse_signature_scheme(&self.scheme, self.hash_algorithm)
+            .map_err(anyhow::Error::msg)?;
 
-        if let Some(ref auth_str) = self.auth {
-            let auth = parse::parse_auth(auth_str)?;
-            ctx.tr_set_auth(signing_key.into(), auth)
+        if let Some(ref auth) = self.auth {
+            ctx.tr_set_auth(signing_key.into(), auth.clone())
                 .context("tr_set_auth failed")?;
         }
 

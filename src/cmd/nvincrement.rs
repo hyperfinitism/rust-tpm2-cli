@@ -5,6 +5,7 @@ use clap::Parser;
 use log::info;
 use tss_esapi::handles::NvIndexTpmHandle;
 use tss_esapi::interface_types::reserved_handles::NvAuth;
+use tss_esapi::structures::Auth;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -26,8 +27,8 @@ pub struct NvIncrementCmd {
     pub hierarchy: String,
 
     /// Auth value for the hierarchy or NV index
-    #[arg(short = 'P', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'P', long = "auth", value_parser = crate::parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Session context file
     #[arg(short = 'S', long = "session")]
@@ -47,19 +48,18 @@ impl NvIncrementCmd {
 
         let nv_auth = resolve_nv_auth(&mut ctx, &self.hierarchy, nv_handle)?;
 
-        if let Some(ref auth_str) = self.auth {
-            let auth = crate::parse::parse_auth(auth_str)?;
+        if let Some(ref auth) = self.auth {
             match &nv_auth {
                 NvAuth::Owner => {
-                    ctx.tr_set_auth(tss_esapi::handles::ObjectHandle::Owner, auth)
+                    ctx.tr_set_auth(tss_esapi::handles::ObjectHandle::Owner, auth.clone())
                         .context("tr_set_auth failed")?;
                 }
                 NvAuth::Platform => {
-                    ctx.tr_set_auth(tss_esapi::handles::ObjectHandle::Platform, auth)
+                    ctx.tr_set_auth(tss_esapi::handles::ObjectHandle::Platform, auth.clone())
                         .context("tr_set_auth failed")?;
                 }
                 NvAuth::NvIndex(h) => {
-                    ctx.tr_set_auth((*h).into(), auth)
+                    ctx.tr_set_auth((*h).into(), auth.clone())
                         .context("tr_set_auth failed")?;
                 }
             }

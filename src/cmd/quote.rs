@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::structures::Data;
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
+use tss_esapi::structures::{Data, PcrSelectionList};
 use tss_esapi::traits::Marshall;
 
 use crate::cli::GlobalOpts;
@@ -23,12 +24,12 @@ pub struct QuoteCmd {
     pub context: ContextSource,
 
     /// PCR selection list (e.g. sha256:0,1,2+sha1:all)
-    #[arg(short = 'l', long = "pcr-list")]
-    pub pcr_list: String,
+    #[arg(short = 'l', long = "pcr-list", value_parser = parse::parse_pcr_selection)]
+    pub pcr_list: PcrSelectionList,
 
     /// Hash algorithm for signing
-    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
-    pub hash_algorithm: String,
+    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
+    pub hash_algorithm: HashingAlgorithm,
 
     /// Signature scheme (rsassa, rsapss, ecdsa, null)
     #[arg(long = "scheme", default_value = "null")]
@@ -60,9 +61,9 @@ impl QuoteCmd {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
         let key_handle = load_key_from_source(&mut ctx, &self.context)?;
-        let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
-        let scheme = parse::parse_signature_scheme(&self.scheme, hash_alg)?;
-        let pcr_selection = parse::parse_pcr_selection(&self.pcr_list)?;
+        let scheme = parse::parse_signature_scheme(&self.scheme, self.hash_algorithm)
+            .map_err(anyhow::Error::msg)?;
+        let pcr_selection = self.pcr_list.clone();
 
         let qualifying_data = match &self.qualification {
             Some(bytes) => Data::try_from(bytes.as_slice().to_vec())

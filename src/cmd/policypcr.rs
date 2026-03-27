@@ -9,6 +9,8 @@ use tss_esapi::constants::SessionType;
 use tss_esapi::handles::{ObjectHandle, SessionHandle};
 use tss_esapi::structures::Digest;
 
+use tss_esapi::structures::PcrSelectionList;
+
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::parse;
@@ -24,8 +26,8 @@ pub struct PolicyPcrCmd {
     pub session: PathBuf,
 
     /// PCR selection (e.g. sha256:0,1,2)
-    #[arg(short = 'l', long = "pcr-list")]
-    pub pcr_list: String,
+    #[arg(short = 'l', long = "pcr-list", value_parser = parse::parse_pcr_selection)]
+    pub pcr_list: PcrSelectionList,
 
     /// Expected PCR digest (hex). If empty, uses current PCR values.
     #[arg(short = 'f', long = "pcr-digest")]
@@ -45,7 +47,7 @@ impl PolicyPcrCmd {
             .try_into()
             .map_err(|_| anyhow::anyhow!("expected a policy session"))?;
 
-        let pcr_selection = parse::parse_pcr_selection(&self.pcr_list)?;
+        let pcr_selection = self.pcr_list.clone();
 
         let pcr_digest = match &self.pcr_digest {
             Some(hex_str) => {

@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::structures::MaxBuffer;
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
+use tss_esapi::structures::{Auth, MaxBuffer};
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -25,12 +26,12 @@ pub struct HmacCmd {
     pub key_context: ContextSource,
 
     /// Auth value for the key
-    #[arg(short = 'p', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Hash algorithm (default: sha256)
-    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
-    pub hash_algorithm: String,
+    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
+    pub hash_algorithm: HashingAlgorithm,
 
     /// Input data file (reads from stdin if not provided)
     #[arg(short = 'i', long = "input")]
@@ -50,11 +51,10 @@ impl HmacCmd {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
         let key_handle = load_object_from_source(&mut ctx, &self.key_context)?;
-        let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
+        let hash_alg = self.hash_algorithm;
 
-        if let Some(ref auth_str) = self.auth {
-            let auth = parse::parse_auth(auth_str)?;
-            ctx.tr_set_auth(key_handle, auth)
+        if let Some(ref auth) = self.auth {
+            ctx.tr_set_auth(key_handle, auth.clone())
                 .context("tr_set_auth failed")?;
         }
 

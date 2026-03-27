@@ -4,6 +4,8 @@ use clap::Parser;
 use log::info;
 use tss_esapi::tss2_esys::*;
 
+use tss_esapi::structures::Auth;
+
 use crate::cli::GlobalOpts;
 use crate::parse;
 use crate::raw_esys::RawEsysContext;
@@ -22,8 +24,8 @@ pub struct HierarchyControlCmd {
     pub enable: u32,
 
     /// Auth value
-    #[arg(short = 'P', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'P', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Set state (true=enable, false=disable)
     #[arg(short = 's', long = "state", default_value = "true")]
@@ -35,8 +37,7 @@ impl HierarchyControlCmd {
         let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
         let auth_handle = self.auth_hierarchy;
 
-        if let Some(ref auth_str) = self.auth {
-            let auth = parse::parse_auth(auth_str)?;
+        if let Some(ref auth) = self.auth {
             raw.set_auth(auth_handle, auth.as_bytes())?;
         }
 
