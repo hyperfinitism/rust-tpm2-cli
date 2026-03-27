@@ -6,7 +6,7 @@ use anyhow::Context;
 use clap::Parser;
 use log::info;
 use tss_esapi::constants::tss::*;
-use tss_esapi::structures::Data;
+use tss_esapi::structures::{Auth, Data};
 use tss_esapi::tss2_esys::*;
 
 use crate::cli::GlobalOpts;
@@ -28,8 +28,8 @@ pub struct CertifyCreationCmd {
     pub certified_context: ContextSource,
 
     /// Auth value for the signing key
-    #[arg(short = 'P', long = "signingkey-auth")]
-    pub signing_auth: Option<String>,
+    #[arg(short = 'P', long = "signingkey-auth", value_parser = parse::parse_auth)]
+    pub signing_auth: Option<Auth>,
 
     /// Creation hash file
     #[arg(short = 'd', long = "creation-hash")]
@@ -63,8 +63,7 @@ impl CertifyCreationCmd {
         let sign_handle = raw.resolve_handle_from_source(&self.signing_context)?;
         let obj_handle = raw.resolve_handle_from_source(&self.certified_context)?;
 
-        if let Some(ref auth_str) = self.signing_auth {
-            let auth = parse::parse_auth(auth_str)?;
+        if let Some(ref auth) = self.signing_auth {
             raw.set_auth(sign_handle, auth.as_bytes())?;
         }
 

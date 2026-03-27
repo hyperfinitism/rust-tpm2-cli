@@ -6,12 +6,12 @@ use std::path::PathBuf;
 use anyhow::{Context, bail};
 use clap::Parser;
 use tss_esapi::attributes::ObjectAttributesBuilder;
-use tss_esapi::interface_types::algorithm::PublicAlgorithm;
+use tss_esapi::interface_types::algorithm::{HashingAlgorithm, PublicAlgorithm};
 use tss_esapi::interface_types::ecc::EccCurve;
 use tss_esapi::interface_types::key_bits::RsaKeyBits;
 use tss_esapi::structures::{
-    Digest, EccScheme, HashScheme, KeyDerivationFunctionScheme, KeyedHashScheme, Public,
-    PublicBuilder, PublicEccParametersBuilder, PublicKeyedHashParameters,
+    Auth, Data, Digest, EccScheme, HashScheme, KeyDerivationFunctionScheme, KeyedHashScheme,
+    PcrSelectionList, Public, PublicBuilder, PublicEccParametersBuilder, PublicKeyedHashParameters,
     PublicRsaParametersBuilder, RsaExponent, RsaScheme, SensitiveData,
 };
 use tss_esapi::traits::Marshall;
@@ -34,12 +34,12 @@ pub struct CreateCmd {
     pub algorithm: String,
 
     /// Hash algorithm
-    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
-    pub hash_algorithm: String,
+    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
+    pub hash_algorithm: HashingAlgorithm,
 
     /// Authorization value for the new key
-    #[arg(short = 'p', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Output file for the private portion
     #[arg(short = 'r', long = "private")]
@@ -54,20 +54,20 @@ pub struct CreateCmd {
     pub key_size: u16,
 
     /// ECC curve (nistp256, nistp384, nistp521, sm2p256, etc.)
-    #[arg(long = "ecc-curve", default_value = "nistp256")]
-    pub ecc_curve: String,
+    #[arg(long = "ecc-curve", default_value = "nistp256", value_parser = parse::parse_ecc_curve)]
+    pub ecc_curve: EccCurve,
 
     /// Input file with data to seal (for keyedhash with null scheme)
     #[arg(short = 'i', long = "seal-data")]
     pub seal_data: Option<PathBuf>,
 
     /// Outside info data (hex:<hex> or file:<path>)
-    #[arg(short = 'q', long = "outside-info")]
-    pub outside_info: Option<String>,
+    #[arg(short = 'q', long = "outside-info", value_parser = parse::parse_data)]
+    pub outside_info: Option<Data>,
 
     /// Creation PCR selection (e.g. sha256:0,1,2)
-    #[arg(short = 'l', long = "creation-pcr")]
-    pub creation_pcr: Option<String>,
+    #[arg(short = 'l', long = "creation-pcr", value_parser = parse::parse_pcr_selection)]
+    pub creation_pcr: Option<PcrSelectionList>,
 
     /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
@@ -79,14 +79,12 @@ impl CreateCmd {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
         let parent_handle = load_key_from_source(&mut ctx, &self.parent_context)?;
-        let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
-        let ecc_curve = parse::parse_ecc_curve(&self.ecc_curve)?;
-        let public = build_child_public(&self.algorithm, hash_alg, self.key_size, ecc_curve)?;
-
-        let auth = match &self.auth {
-            Some(a) => Some(parse::parse_auth(a)?),
-            None => None,
-        };
+        let public = build_child_public(
+            &self.algorithm,
+            self.hash_algorithm,
+            self.key_size,
+            self.ecc_curve,
+        )?;
 
         // If seal data is provided, read it.
         let sensitive_data = match &self.seal_data {
@@ -101,25 +99,15 @@ impl CreateCmd {
             None => None,
         };
 
-        let outside_info = match &self.outside_info {
-            Some(s) => Some(parse::parse_data(s)?),
-            None => None,
-        };
-
-        let creation_pcr = match &self.creation_pcr {
-            Some(s) => Some(parse::parse_pcr_selection(s)?),
-            None => None,
-        };
-
         let session_path = self.session.as_deref();
         let result = execute_with_optional_session(&mut ctx, session_path, |ctx| {
             ctx.create(
                 parent_handle,
                 public.clone(),
-                auth.clone(),
+                self.auth.clone(),
                 sensitive_data.clone(),
-                outside_info.clone(),
-                creation_pcr.clone(),
+                self.outside_info.clone(),
+                self.creation_pcr.clone(),
             )
         })
         .context("TPM2_Create failed")?;

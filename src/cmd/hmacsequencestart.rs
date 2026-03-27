@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
+use tss_esapi::structures::Auth;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -24,12 +26,12 @@ pub struct HmacSequenceStartCmd {
     pub key_context: ContextSource,
 
     /// Auth value for the key
-    #[arg(short = 'p', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Hash algorithm (default: sha256)
-    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
-    pub hash_algorithm: String,
+    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
+    pub hash_algorithm: HashingAlgorithm,
 
     /// Output file for the sequence context
     #[arg(short = 'o', long = "output")]
@@ -45,21 +47,17 @@ impl HmacSequenceStartCmd {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
         let key_handle = load_object_from_source(&mut ctx, &self.key_context)?;
-        let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
+        let hash_alg = self.hash_algorithm;
 
-        let auth_value = match &self.auth {
-            Some(a) => {
-                let auth = parse::parse_auth(a)?;
-                ctx.tr_set_auth(key_handle, auth.clone())
-                    .context("tr_set_auth failed")?;
-                Some(auth)
-            }
-            None => None,
-        };
+        let auth_value = self.auth.clone();
+        if let Some(ref auth) = auth_value {
+            ctx.tr_set_auth(key_handle, auth.clone())
+                .context("tr_set_auth failed")?;
+        }
 
         let session_path = self.session.as_deref();
         let seq_handle = execute_with_optional_session(&mut ctx, session_path, |ctx| {
-            ctx.hmac_sequence_start(key_handle, hash_alg, auth_value.clone())
+            ctx.hmac_sequence_start(key_handle, hash_alg, auth_value)
         })
         .context("TPM2_HMAC_Start failed")?;
 

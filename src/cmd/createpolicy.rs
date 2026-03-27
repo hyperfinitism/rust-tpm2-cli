@@ -7,10 +7,12 @@ use clap::Parser;
 use log::info;
 use tss_esapi::constants::SessionType;
 use tss_esapi::handles::{ObjectHandle, SessionHandle};
-use tss_esapi::structures::SymmetricDefinition;
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
+use tss_esapi::structures::{PcrSelectionList, SymmetricDefinition};
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
+use crate::parse;
 
 /// Create a policy from a policy script (trial session).
 ///
@@ -23,8 +25,8 @@ use crate::context::create_context;
 #[derive(Parser)]
 pub struct CreatePolicyCmd {
     /// Hash algorithm for the policy (default: sha256)
-    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
-    pub hash_algorithm: String,
+    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
+    pub hash_algorithm: HashingAlgorithm,
 
     /// Output file for the policy digest
     #[arg(short = 'L', long = "policy")]
@@ -35,14 +37,13 @@ pub struct CreatePolicyCmd {
     pub policy_pcr: bool,
 
     /// PCR selection for --policy-pcr (e.g. sha256:0,1,2)
-    #[arg(short = 'l', long = "pcr-list")]
-    pub pcr_list: Option<String>,
+    #[arg(short = 'l', long = "pcr-list", value_parser = parse::parse_pcr_selection)]
+    pub pcr_list: Option<PcrSelectionList>,
 }
 
 impl CreatePolicyCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
-        let hash_alg = crate::parse::parse_hashing_algorithm(&self.hash_algorithm)?;
 
         // Start a trial session.
         let session = ctx
@@ -52,7 +53,7 @@ impl CreatePolicyCmd {
                 None,
                 SessionType::Trial,
                 SymmetricDefinition::AES_128_CFB,
-                hash_alg,
+                self.hash_algorithm,
             )
             .context("failed to start trial session")?
             .ok_or_else(|| anyhow::anyhow!("no session returned"))?;
@@ -62,12 +63,11 @@ impl CreatePolicyCmd {
             .map_err(|_| anyhow::anyhow!("expected policy session"))?;
 
         if self.policy_pcr {
-            let pcr_spec = self
+            let pcr_selection = self
                 .pcr_list
-                .as_deref()
+                .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("--pcr-list required with --policy-pcr"))?;
-            let pcr_selection = crate::parse::parse_pcr_selection(pcr_spec)?;
-            ctx.policy_pcr(policy_session, Default::default(), pcr_selection)
+            ctx.policy_pcr(policy_session, Default::default(), pcr_selection.clone())
                 .context("TPM2_PolicyPCR failed")?;
         }
 

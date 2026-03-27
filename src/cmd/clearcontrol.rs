@@ -5,6 +5,7 @@ use clap::Parser;
 use log::info;
 
 use tss_esapi::handles::AuthHandle;
+use tss_esapi::structures::Auth;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -21,8 +22,8 @@ pub struct ClearControlCmd {
     pub hierarchy: AuthHandle,
 
     /// Auth value for the hierarchy
-    #[arg(short = 'P', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'P', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Set to disable clear (true) or enable clear (false)
     #[arg(short = 's', long = "disable-clear", default_value = "true")]
@@ -37,9 +38,8 @@ impl ClearControlCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        if let Some(ref auth_str) = self.auth {
-            let auth = parse::parse_auth(auth_str)?;
-            ctx.tr_set_auth(self.hierarchy.into(), auth)
+        if let Some(ref auth) = self.auth {
+            ctx.tr_set_auth(self.hierarchy.into(), auth.clone())
                 .context("tr_set_auth failed")?;
         }
 

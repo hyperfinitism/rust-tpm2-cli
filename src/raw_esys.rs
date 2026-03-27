@@ -188,7 +188,7 @@ pub struct CommitResult {
 pub fn commit(
     tcti: Option<&str>,
     key_context: &crate::handle::ContextSource,
-    auth: Option<&str>,
+    auth: Option<&tss_esapi::structures::Auth>,
     p1: Option<&[u8]>,
     s2: Option<&[u8]>,
     y2: Option<&[u8]>,
@@ -197,14 +197,13 @@ pub fn commit(
     let sign_handle = raw.resolve_handle_from_source(key_context)?;
 
     // Set auth on the key if provided.
-    if let Some(auth_str) = auth {
-        let auth_val = crate::parse::parse_auth(auth_str)?;
+    if let Some(auth) = auth {
         unsafe {
             let mut tpm2b_auth = TPM2B_AUTH {
-                size: auth_val.as_bytes().len() as u16,
+                size: auth.as_bytes().len() as u16,
                 ..Default::default()
             };
-            tpm2b_auth.buffer[..auth_val.as_bytes().len()].copy_from_slice(auth_val.as_bytes());
+            tpm2b_auth.buffer[..auth.as_bytes().len()].copy_from_slice(auth.as_bytes());
             let rc = Esys_TR_SetAuth(raw.ptr(), sign_handle, &tpm2b_auth);
             if rc != 0 {
                 bail!("Esys_TR_SetAuth failed: 0x{rc:08x}");

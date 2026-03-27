@@ -6,6 +6,7 @@ use anyhow::Context;
 use clap::Parser;
 use log::info;
 use tss_esapi::handles::{NvIndexTpmHandle, ObjectHandle, TpmHandle};
+use tss_esapi::structures::Auth;
 
 use tss_esapi::interface_types::reserved_handles::Provision;
 
@@ -31,8 +32,8 @@ pub struct NvUndefineCmd {
     pub hierarchy: Provision,
 
     /// Authorization value for the hierarchy
-    #[arg(short = 'P', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'P', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
@@ -50,10 +51,9 @@ impl NvUndefineCmd {
         let nv_tpm_handle = NvIndexTpmHandle::new(self.nv_index)
             .map_err(|e| anyhow::anyhow!("invalid NV index handle: {e}"))?;
 
-        if let Some(ref auth_str) = self.auth {
-            let auth_value = parse::parse_auth(auth_str)?;
+        if let Some(ref auth) = self.auth {
             let hier_obj: ObjectHandle = parse::provision_to_hierarchy_auth(self.hierarchy).into();
-            ctx.tr_set_auth(hier_obj, auth_value)
+            ctx.tr_set_auth(hier_obj, auth.clone())
                 .context("failed to set hierarchy auth")?;
         }
 

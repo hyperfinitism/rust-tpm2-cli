@@ -12,7 +12,7 @@ use tss_esapi::interface_types::ecc::EccCurve;
 use tss_esapi::interface_types::key_bits::RsaKeyBits;
 use tss_esapi::interface_types::reserved_handles::{Hierarchy, HierarchyAuth};
 use tss_esapi::structures::{
-    Digest, EccScheme, KeyDerivationFunctionScheme, Public, PublicBuilder,
+    Auth, Digest, EccScheme, KeyDerivationFunctionScheme, Public, PublicBuilder,
     PublicEccParametersBuilder, PublicRsaParametersBuilder, RsaExponent, RsaScheme,
     SymmetricDefinitionObject,
 };
@@ -44,12 +44,12 @@ pub struct CreateEkCmd {
     pub algorithm: String,
 
     /// Endorsement hierarchy auth value
-    #[arg(short = 'P', long = "eh-auth")]
-    pub eh_auth: Option<String>,
+    #[arg(short = 'P', long = "eh-auth", value_parser = parse::parse_auth)]
+    pub eh_auth: Option<Auth>,
 
     /// Owner hierarchy auth value (required when persisting)
-    #[arg(short = 'w', long = "owner-auth")]
-    pub owner_auth: Option<String>,
+    #[arg(short = 'w', long = "owner-auth", value_parser = parse::parse_auth)]
+    pub owner_auth: Option<Auth>,
 
     /// Output context file path
     #[arg(short = 'c', long = "ek-context", required = true)]
@@ -71,10 +71,9 @@ impl CreateEkCmd {
         let public_template = build_ek_public(&self.algorithm)?;
 
         // Set endorsement hierarchy auth if provided.
-        if let Some(ref a) = self.eh_auth {
-            let auth = parse::parse_auth(a)?;
+        if let Some(ref auth) = self.eh_auth {
             let hier_obj: ObjectHandle = HierarchyAuth::Endorsement.into();
-            ctx.tr_set_auth(hier_obj, auth)
+            ctx.tr_set_auth(hier_obj, auth.clone())
                 .context("failed to set endorsement hierarchy auth")?;
         }
 

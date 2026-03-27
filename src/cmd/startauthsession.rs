@@ -8,6 +8,8 @@ use log::info;
 use tss_esapi::attributes::SessionAttributesBuilder;
 use tss_esapi::constants::SessionType;
 use tss_esapi::handles::SessionHandle;
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
+use tss_esapi::structures::SymmetricDefinition;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -25,8 +27,8 @@ pub struct StartAuthSessionCmd {
     pub session: PathBuf,
 
     /// Hash algorithm for the session (sha1, sha256, sha384, sha512)
-    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
-    pub hash_algorithm: String,
+    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
+    pub hash_algorithm: HashingAlgorithm,
 
     /// Start a policy session (instead of the default trial session)
     #[arg(long = "policy-session", conflicts_with_all = ["hmac_session", "audit_session"])]
@@ -41,8 +43,8 @@ pub struct StartAuthSessionCmd {
     pub audit_session: bool,
 
     /// Symmetric algorithm for session encryption (aes128cfb, aes256cfb, xor, null)
-    #[arg(long = "symmetric", default_value = "aes128cfb")]
-    pub symmetric: String,
+    #[arg(long = "symmetric", default_value = "aes128cfb", value_parser = parse::parse_symmetric_definition)]
+    pub symmetric: SymmetricDefinition,
 
     /// Bind the session to a loaded object (file:<path> or hex:<handle>)
     #[arg(long = "bind", value_parser = parse_context_source)]
@@ -61,9 +63,7 @@ impl StartAuthSessionCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
         let session_type = self.resolve_session_type();
-        let symmetric = parse::parse_symmetric_definition(&self.symmetric)?;
 
         let bind_handle = match &self.bind {
             Some(src) => Some(load_object_from_source(&mut ctx, src)?),
@@ -71,7 +71,14 @@ impl StartAuthSessionCmd {
         };
 
         let session = ctx
-            .start_auth_session(None, bind_handle, None, session_type, symmetric, hash_alg)
+            .start_auth_session(
+                None,
+                bind_handle,
+                None,
+                session_type,
+                self.symmetric,
+                self.hash_algorithm,
+            )
             .context("TPM2_StartAuthSession failed")?
             .ok_or_else(|| anyhow::anyhow!("no session returned"))?;
 

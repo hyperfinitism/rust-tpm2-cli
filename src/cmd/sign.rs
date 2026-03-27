@@ -6,6 +6,7 @@ use anyhow::Context;
 use clap::Parser;
 use log::info;
 use tss_esapi::constants::tss::TPM2_RH_NULL;
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
 use tss_esapi::structures::{Digest, HashcheckTicket};
 use tss_esapi::traits::Marshall;
 use tss_esapi::tss2_esys::TPMT_TK_HASHCHECK;
@@ -25,8 +26,8 @@ pub struct SignCmd {
     pub context: ContextSource,
 
     /// Hash algorithm (sha1, sha256, sha384, sha512)
-    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
-    pub hash_algorithm: String,
+    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
+    pub hash_algorithm: HashingAlgorithm,
 
     /// Signature scheme (rsassa, rsapss, ecdsa)
     #[arg(short = 's', long = "scheme", default_value = "rsassa")]
@@ -54,8 +55,8 @@ impl SignCmd {
         let mut ctx = create_context(global.tcti.as_deref())?;
 
         let key_handle = load_key_from_source(&mut ctx, &self.context)?;
-        let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
-        let scheme = parse::parse_signature_scheme(&self.scheme, hash_alg)?;
+        let scheme = parse::parse_signature_scheme(&self.scheme, self.hash_algorithm)
+            .map_err(anyhow::Error::msg)?;
 
         let digest_bytes = std::fs::read(&self.digest)
             .with_context(|| format!("reading digest: {}", self.digest.display()))?;

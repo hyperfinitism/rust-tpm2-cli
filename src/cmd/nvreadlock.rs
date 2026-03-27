@@ -4,6 +4,8 @@ use clap::Parser;
 use log::info;
 use tss_esapi::tss2_esys::*;
 
+use tss_esapi::structures::Auth;
+
 use crate::cli::GlobalOpts;
 use crate::parse::{self, NvAuthEntity};
 use crate::raw_esys::RawEsysContext;
@@ -22,8 +24,8 @@ pub struct NvReadLockCmd {
     pub hierarchy: NvAuthEntity,
 
     /// Auth value
-    #[arg(short = 'P', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'P', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 }
 
 impl NvReadLockCmd {
@@ -35,8 +37,7 @@ impl NvReadLockCmd {
 
         let auth_handle = RawEsysContext::resolve_nv_auth_entity(self.hierarchy, nv_handle);
 
-        if let Some(ref auth_str) = self.auth {
-            let auth = parse::parse_auth(auth_str)?;
+        if let Some(ref auth) = self.auth {
             raw.set_auth(auth_handle, auth.as_bytes())?;
         }
 

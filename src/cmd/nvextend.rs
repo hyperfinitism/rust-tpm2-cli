@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
+use tss_esapi::structures::Auth;
 use tss_esapi::tss2_esys::*;
 
 use crate::cli::GlobalOpts;
@@ -25,8 +26,8 @@ pub struct NvExtendCmd {
     pub hierarchy: NvAuthEntity,
 
     /// Auth value
-    #[arg(short = 'P', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'P', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Input data file to extend
     #[arg(short = 'i', long = "input")]
@@ -44,8 +45,7 @@ impl NvExtendCmd {
 
         let auth_handle = RawEsysContext::resolve_nv_auth_entity(self.hierarchy, nv_handle);
 
-        if let Some(ref auth_str) = self.auth {
-            let auth = parse::parse_auth(auth_str)?;
+        if let Some(ref auth) = self.auth {
             raw.set_auth(auth_handle, auth.as_bytes())?;
         }
 

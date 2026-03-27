@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::structures::{Data, EncryptedSecret, Private, Public, SymmetricDefinitionObject};
+use tss_esapi::structures::{
+    Auth, Data, EncryptedSecret, Private, Public, SymmetricDefinitionObject,
+};
 use tss_esapi::traits::UnMarshall;
 
 use crate::cli::GlobalOpts;
@@ -24,8 +26,8 @@ pub struct ImportCmd {
     pub parent_context: ContextSource,
 
     /// Auth value for the parent key
-    #[arg(short = 'P', long = "parent-auth")]
-    pub parent_auth: Option<String>,
+    #[arg(short = 'P', long = "parent-auth", value_parser = parse::parse_auth)]
+    pub parent_auth: Option<Auth>,
 
     /// Input public file (marshaled TPM2B_PUBLIC)
     #[arg(short = 'u', long = "public")]
@@ -62,9 +64,8 @@ impl ImportCmd {
 
         let parent_handle = load_object_from_source(&mut ctx, &self.parent_context)?;
 
-        if let Some(ref auth_str) = self.parent_auth {
-            let auth = parse::parse_auth(auth_str)?;
-            ctx.tr_set_auth(parent_handle, auth)
+        if let Some(ref auth) = self.parent_auth {
+            ctx.tr_set_auth(parent_handle, auth.clone())
                 .context("tr_set_auth failed")?;
         }
 

@@ -5,6 +5,8 @@ use log::info;
 use tss_esapi::constants::tss::*;
 use tss_esapi::tss2_esys::*;
 
+use tss_esapi::structures::Auth;
+
 use crate::cli::GlobalOpts;
 use crate::parse;
 use crate::raw_esys::RawEsysContext;
@@ -19,8 +21,8 @@ pub struct SetCommandAuditStatusCmd {
     pub hierarchy: u32,
 
     /// Auth value
-    #[arg(short = 'P', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'P', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Hash algorithm for the audit digest
     #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
@@ -40,8 +42,7 @@ impl SetCommandAuditStatusCmd {
         let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
         let auth_handle = self.hierarchy;
 
-        if let Some(ref auth_str) = self.auth {
-            let auth = parse::parse_auth(auth_str)?;
+        if let Some(ref auth) = self.auth {
             raw.set_auth(auth_handle, auth.as_bytes())?;
         }
 

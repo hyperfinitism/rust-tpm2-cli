@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::structures::{Data, PublicKeyRsa, RsaDecryptionScheme};
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
+use tss_esapi::structures::{Auth, Data, PublicKeyRsa, RsaDecryptionScheme};
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -24,16 +25,16 @@ pub struct RsaDecryptCmd {
     pub key_context: ContextSource,
 
     /// Auth value for the key
-    #[arg(short = 'p', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Decryption scheme (rsaes, oaep, null)
     #[arg(short = 's', long = "scheme", default_value = "rsaes")]
     pub scheme: String,
 
     /// Hash algorithm for OAEP (default: sha256)
-    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
-    pub hash_algorithm: String,
+    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
+    pub hash_algorithm: HashingAlgorithm,
 
     /// Label for OAEP (optional)
     #[arg(short = 'l', long = "label")]
@@ -57,12 +58,10 @@ impl RsaDecryptCmd {
         let mut ctx = create_context(global.tcti.as_deref())?;
         let key_handle = load_key_from_source(&mut ctx, &self.key_context)?;
 
-        let hash_alg = parse::parse_hashing_algorithm(&self.hash_algorithm)?;
-        let scheme = parse_rsa_scheme(&self.scheme, hash_alg)?;
+        let scheme = parse_rsa_scheme(&self.scheme, self.hash_algorithm)?;
 
-        if let Some(ref auth_str) = self.auth {
-            let auth = parse::parse_auth(auth_str)?;
-            ctx.tr_set_auth(key_handle.into(), auth)
+        if let Some(ref auth) = self.auth {
+            ctx.tr_set_auth(key_handle.into(), auth.clone())
                 .context("tr_set_auth failed")?;
         }
 

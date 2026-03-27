@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::structures::{Data, SymmetricDefinitionObject};
+use tss_esapi::structures::{Auth, Data, SymmetricDefinitionObject};
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -31,8 +31,8 @@ pub struct DuplicateCmd {
     pub parent_context_null: bool,
 
     /// Auth value for the object
-    #[arg(short = 'p', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Symmetric algorithm for inner wrapper (aes128cfb, null)
     #[arg(short = 'G', long = "wrapper-algorithm", default_value = "null")]
@@ -73,9 +73,8 @@ impl DuplicateCmd {
             }
         };
 
-        if let Some(ref auth_str) = self.auth {
-            let auth = parse::parse_auth(auth_str)?;
-            ctx.tr_set_auth(object_handle, auth)
+        if let Some(ref auth) = self.auth {
+            ctx.tr_set_auth(object_handle, auth.clone())
                 .context("tr_set_auth failed")?;
         }
 

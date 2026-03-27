@@ -29,8 +29,8 @@ pub struct PolicyCounterTimerCmd {
     pub offset: u16,
 
     /// Operation (eq, neq, sgt, ugt, slt, ult, sge, uge, sle, ule, bs, bc)
-    #[arg(long = "operation", default_value = "eq")]
-    pub operation: String,
+    #[arg(long = "operation", default_value = "eq", value_parser = parse::parse_tpm2_operation)]
+    pub operation: u16,
 }
 
 impl PolicyCounterTimerCmd {
@@ -48,8 +48,6 @@ impl PolicyCounterTimerCmd {
         operand.size = operand_bytes.len() as u16;
         operand.buffer[..operand_bytes.len()].copy_from_slice(&operand_bytes);
 
-        let operation = parse::parse_tpm2_operation(&self.operation)?;
-
         unsafe {
             let rc = Esys_PolicyCounterTimer(
                 raw.ptr(),
@@ -59,7 +57,7 @@ impl PolicyCounterTimerCmd {
                 ESYS_TR_NONE,
                 &operand,
                 self.offset,
-                operation,
+                self.operation,
             );
             if rc != 0 {
                 bail!("Esys_PolicyCounterTimer failed: 0x{rc:08x}");

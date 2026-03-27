@@ -6,6 +6,8 @@ use clap::Parser;
 use log::info;
 use tss_esapi::tss2_esys::*;
 
+use tss_esapi::structures::Auth;
+
 use crate::cli::GlobalOpts;
 use crate::parse::{self, NvAuthEntity};
 use crate::raw_esys::RawEsysContext;
@@ -28,8 +30,8 @@ pub struct PolicyAuthorizeNvCmd {
     pub hierarchy: NvAuthEntity,
 
     /// Auth value for the hierarchy
-    #[arg(short = 'P', long = "auth")]
-    pub auth: Option<String>,
+    #[arg(short = 'P', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 }
 
 impl PolicyAuthorizeNvCmd {
@@ -45,9 +47,8 @@ impl PolicyAuthorizeNvCmd {
 
         let auth_handle = RawEsysContext::resolve_nv_auth_entity(self.hierarchy, nv_handle);
 
-        if let Some(ref auth_str) = self.auth {
-            let a = parse::parse_auth(auth_str)?;
-            raw.set_auth(auth_handle, a.as_bytes())?;
+        if let Some(ref auth) = self.auth {
+            raw.set_auth(auth_handle, auth.as_bytes())?;
         }
 
         unsafe {

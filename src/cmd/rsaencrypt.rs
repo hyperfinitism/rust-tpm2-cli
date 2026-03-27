@@ -5,13 +5,14 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
 use tss_esapi::structures::{Data, PublicKeyRsa, RsaDecryptionScheme};
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
 use crate::output;
-use crate::parse::parse_context_source;
+use crate::parse::{self, parse_context_source};
 
 /// Perform RSA encryption using a TPM-loaded key.
 ///
@@ -27,8 +28,8 @@ pub struct RsaEncryptCmd {
     pub scheme: String,
 
     /// Hash algorithm for OAEP (default: sha256)
-    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
-    pub hash_algorithm: String,
+    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
+    pub hash_algorithm: HashingAlgorithm,
 
     /// Label for OAEP (optional)
     #[arg(short = 'l', long = "label")]
@@ -48,8 +49,7 @@ impl RsaEncryptCmd {
         let mut ctx = create_context(global.tcti.as_deref())?;
         let key_handle = load_key_from_source(&mut ctx, &self.key_context)?;
 
-        let hash_alg = crate::parse::parse_hashing_algorithm(&self.hash_algorithm)?;
-        let scheme = parse_rsa_scheme(&self.scheme, hash_alg)?;
+        let scheme = parse_rsa_scheme(&self.scheme, self.hash_algorithm)?;
 
         let plaintext = std::fs::read(&self.input)
             .with_context(|| format!("reading input from {}", self.input.display()))?;
