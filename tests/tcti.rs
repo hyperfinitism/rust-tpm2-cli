@@ -10,7 +10,6 @@ mod common;
 use assert_cmd::Command;
 use common::SwtpmSession;
 
-#[cfg(unix)]
 #[test]
 fn valid_swtpm_uds_endpoint_via_t_flag() {
     let s = SwtpmSession::new_uds();
@@ -23,7 +22,6 @@ fn valid_swtpm_tcp_endpoint_via_t_flag() {
     s.cmd("getrandom").args(["1", "--hex"]).assert().success();
 }
 
-#[cfg(unix)]
 #[test]
 fn swtpm_uds_env_var_works() {
     let s = SwtpmSession::new_uds();

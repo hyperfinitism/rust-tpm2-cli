@@ -8,10 +8,9 @@
 
 use assert_cmd::Command;
 use assert_fs::TempDir;
+use socket2::{Domain, SockAddr, Socket, Type};
 use std::io::Write;
 use std::net::TcpStream;
-#[cfg(unix)]
-use std::os::unix::net::UnixStream;
 use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
@@ -41,19 +40,14 @@ pub struct SwtpmSession {
 }
 
 impl SwtpmSession {
-    /// Start a new swtpm instance using either Unix domain socket or TCP
+    /// Start a new swtpm instance using a Unix domain socket.
     pub fn new() -> Self {
-        if cfg!(unix) {
-            Self::new_uds()
-        } else {
-            Self::new_tcp()
-        }
+        Self::new_uds()
     }
     /// Start a new swtpm instance using a Unix domain socket.
     ///
     /// UDS avoids TCP port conflicts entirely, making it more reliable for
     /// parallel test execution.
-    #[cfg(unix)]
     pub fn new_uds() -> Self {
         for attempt in 0..MAX_SWTPM_RETRIES {
             let tmp = TempDir::new().expect("failed to create temp dir");
@@ -81,7 +75,10 @@ impl SwtpmSession {
             // Wait for swtpm to be ready by checking the socket.
             let mut connected = false;
             for _ in 0..40 {
-                if UnixStream::connect(&sock_path).is_ok() {
+                if let Ok(addr) = SockAddr::unix(&sock_path)
+                    && let Ok(sock) = Socket::new(Domain::UNIX, Type::STREAM, None)
+                    && sock.connect(&addr).is_ok()
+                {
                     connected = true;
                     break;
                 }
