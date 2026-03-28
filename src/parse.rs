@@ -680,86 +680,87 @@ pub fn parse_tpm2_operation(s: &str) -> Result<u16, String> {
     }
 }
 
-// ===========================================================================
-// Tests
-// ===========================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[test]
-fn symdef_aes_256_cbc() {
-    let def = parse_symmetric_definition("aes-256-cbc").unwrap();
-    assert!(matches!(
-        def,
-        SymmetricDefinition::Aes {
-            key_bits: AesKeyBits::Aes256,
-            mode: SymmetricMode::Cbc,
-        }
-    ));
-}
+    #[test]
+    fn symdef_aes_256_cbc() {
+        let def = parse_symmetric_definition("aes-256-cbc").unwrap();
+        assert_eq!(
+            def,
+            SymmetricDefinition::Aes {
+                key_bits: AesKeyBits::Aes256,
+                mode: SymmetricMode::Cbc,
+            }
+        );
+    }
 
-#[test]
-fn symdef_camellia_192_ecb() {
-    let def = parse_symmetric_definition("camellia-192-ecb").unwrap();
-    assert!(matches!(
-        def,
-        SymmetricDefinition::Camellia {
-            key_bits: CamelliaKeyBits::Camellia192,
-            mode: SymmetricMode::Ecb,
-        }
-    ));
-}
+    #[test]
+    fn symdef_camellia_192_ecb() {
+        let def = parse_symmetric_definition("camellia-192-ecb").unwrap();
+        assert_eq!(
+            def,
+            SymmetricDefinition::Camellia {
+                key_bits: CamelliaKeyBits::Camellia192,
+                mode: SymmetricMode::Ecb,
+            }
+        );
+    }
 
-#[test]
-fn symdef_xor_sha1() {
-    let def = parse_symmetric_definition("xor-sha1").unwrap();
-    assert!(matches!(
-        def,
-        SymmetricDefinition::Xor {
-            hashing_algorithm: HashingAlgorithm::Sha1,
-        }
-    ));
-}
+    #[test]
+    fn symdef_xor_sha1() {
+        let def = parse_symmetric_definition("xor-sha1").unwrap();
+        assert_eq!(
+            def,
+            SymmetricDefinition::Xor {
+                hashing_algorithm: HashingAlgorithm::Sha1,
+            }
+        );
+    }
 
-// Legacy shorthand forms
-#[test]
-fn symdef_aes128cfb() {
-    let def = parse_symmetric_definition("aes128cfb").unwrap();
-    assert!(matches!(def, SymmetricDefinition::AES_128_CFB));
-}
+    // Legacy shorthand forms
+    #[test]
+    fn symdef_aes128cfb() {
+        let def = parse_symmetric_definition("aes128cfb").unwrap();
+        assert_eq!(def, SymmetricDefinition::AES_128_CFB);
+    }
 
-#[test]
-fn symdef_aes256cfb() {
-    let def = parse_symmetric_definition("aes256cfb").unwrap();
-    assert!(matches!(def, SymmetricDefinition::AES_256_CFB));
-}
+    #[test]
+    fn symdef_aes256cfb() {
+        let def = parse_symmetric_definition("aes256cfb").unwrap();
+        assert_eq!(def, SymmetricDefinition::AES_256_CFB);
+    }
 
-#[test]
-fn symdef_xor() {
-    let def = parse_symmetric_definition("xor").unwrap();
-    assert!(matches!(
-        def,
-        SymmetricDefinition::Xor {
-            hashing_algorithm: HashingAlgorithm::Sha256,
-        }
-    ));
-}
+    #[test]
+    fn symdef_xor() {
+        let def = parse_symmetric_definition("xor").unwrap();
+        assert_eq!(
+            def,
+            SymmetricDefinition::Xor {
+                hashing_algorithm: HashingAlgorithm::Sha256,
+            }
+        );
+    }
 
-// Error cases
-#[test]
-fn symdef_unknown_algo() {
-    assert!(parse_symmetric_definition("foobar-128-cfb").is_err());
-}
+    // Error cases
+    #[test]
+    fn symdef_unknown_algo() {
+        assert!(parse_symmetric_definition("foobar-128-cfb").is_err());
+    }
 
-#[test]
-fn symdef_aes_128_with_invalid_null_mode() {
-    assert!(parse_symmetric_definition("aes-128-null").is_err());
-}
+    #[test]
+    fn symdef_aes_128_with_invalid_null_mode() {
+        assert!(parse_symmetric_definition("aes-128-null").is_err());
+    }
 
-#[test]
-fn symdef_sm4_cbc_with_unavailable_192_bits() {
-    assert!(parse_symmetric_definition("sm4-192-cbc").is_err());
-}
+    #[test]
+    fn symdef_sm4_cbc_with_unavailable_192_bits() {
+        assert!(parse_symmetric_definition("sm4-192-cbc").is_err());
+    }
 
-#[test]
-fn symdef_empty_string() {
-    assert!(parse_symmetric_definition("").is_err());
+    #[test]
+    fn symdef_empty_string() {
+        assert!(parse_symmetric_definition("").is_err());
+    }
 }
