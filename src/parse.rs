@@ -16,6 +16,7 @@ use tss_esapi::attributes::NvIndexAttributesBuilder;
 use tss_esapi::handles::AuthHandle;
 use tss_esapi::interface_types::algorithm::{HashingAlgorithm, SymmetricMode};
 use tss_esapi::interface_types::ecc::EccCurve;
+use tss_esapi::interface_types::key_bits::{AesKeyBits, CamelliaKeyBits, Sm4KeyBits};
 use tss_esapi::interface_types::reserved_handles::{Hierarchy, HierarchyAuth, Provision};
 use tss_esapi::structures::{
     Auth, Data, HashScheme, PcrSelectionList, PcrSelectionListBuilder, PcrSlot, SensitiveData,
@@ -484,21 +485,130 @@ pub fn parse_ecc_curve(s: &str) -> Result<EccCurve, String> {
 // Symmetric definition (for sessions)
 // ---------------------------------------------------------------------------
 
-/// Parse a symmetric algorithm definition for session encryption.
+/// Parse a symmetric algorithm definition.
 ///
-/// Accepted values: `aes128cfb`, `aes256cfb`, `xor`, `null`.
+/// Accepted formats:
+/// - `aes-{128,192,256}-{cfb,cbc,ecb,ofb,ctr}` — AES with key size and mode
+/// - `sm4-128-{cfb,cbc,ecb,ofb,ctr}` — SM4 with key size and mode
+/// - `camellia-{128,192,256}-{cfb,cbc,ecb,ofb,ctr}` — Camellia with key size and mode
+/// - `xor-{sha1,sha256,...}` — XOR with a hashing algorithm
+/// - `null` — no symmetric algorithm
+///
+/// Legacy shorthand forms `aes128cfb` and `aes256cfb` are also accepted.
 ///
 /// Intended for use as a clap `value_parser`.
 pub fn parse_symmetric_definition(s: &str) -> Result<SymmetricDefinition, String> {
-    match s.to_lowercase().as_str() {
-        "aes128cfb" | "aes-128-cfb" => Ok(SymmetricDefinition::AES_128_CFB),
-        "aes256cfb" | "aes-256-cfb" => Ok(SymmetricDefinition::AES_256_CFB),
-        "xor" => Ok(SymmetricDefinition::Xor {
-            hashing_algorithm: HashingAlgorithm::Sha256,
-        }),
-        "null" => Ok(SymmetricDefinition::Null),
+    let lower = s.to_lowercase();
+
+    // Handle "null" first.
+    if lower == "null" {
+        return Ok(SymmetricDefinition::Null);
+    }
+
+    // Legacy shorthand aliases for backwards compatibility.
+    match lower.as_str() {
+        "aes128cfb" => {
+            return Ok(SymmetricDefinition::Aes {
+                key_bits: AesKeyBits::Aes128,
+                mode: SymmetricMode::Cfb,
+            });
+        }
+        "aes256cfb" => {
+            return Ok(SymmetricDefinition::Aes {
+                key_bits: AesKeyBits::Aes256,
+                mode: SymmetricMode::Cfb,
+            });
+        }
+        "xor" => {
+            return Ok(SymmetricDefinition::Xor {
+                hashing_algorithm: HashingAlgorithm::Sha256,
+            });
+        }
+        _ => {}
+    }
+
+    let parts: Vec<&str> = lower.split('-').collect();
+
+    match parts[0] {
+        "aes" => {
+            if parts.len() != 3 {
+                return Err(format!(
+                    "expected 'aes-<bits>-<mode>' (e.g. aes-128-cfb), got: '{s}'"
+                ));
+            }
+            let key_bits = match parts[1] {
+                "128" => AesKeyBits::Aes128,
+                "192" => AesKeyBits::Aes192,
+                "256" => AesKeyBits::Aes256,
+                _ => {
+                    return Err(format!(
+                        "unsupported AES key size: {} (expected 128, 192, or 256)",
+                        parts[1]
+                    ));
+                }
+            };
+            let mode = parse_symmetric_mode(parts[2])?;
+            if mode == SymmetricMode::Null {
+                return Err(format!("unsupported AES symmetric mode: {}", parts[2]));
+            };
+            Ok(SymmetricDefinition::Aes { key_bits, mode })
+        }
+        "sm4" => {
+            if parts.len() != 3 {
+                return Err(format!(
+                    "expected 'sm4-128-<mode>' (e.g. sm4-128-cfb), got: '{s}'"
+                ));
+            }
+            let key_bits = match parts[1] {
+                "128" => Sm4KeyBits::Sm4_128,
+                _ => {
+                    return Err(format!(
+                        "unsupported SM4 key size: {} (expected 128)",
+                        parts[1]
+                    ));
+                }
+            };
+            let mode = parse_symmetric_mode(parts[2])?;
+            if mode == SymmetricMode::Null {
+                return Err(format!("unsupported SM4 symmetric mode: {}", parts[2]));
+            };
+            Ok(SymmetricDefinition::Sm4 { key_bits, mode })
+        }
+        "camellia" => {
+            if parts.len() != 3 {
+                return Err(format!(
+                    "expected 'camellia-<bits>-<mode>' (e.g. camellia-128-cfb), got: '{s}'"
+                ));
+            }
+            let key_bits = match parts[1] {
+                "128" => CamelliaKeyBits::Camellia128,
+                "192" => CamelliaKeyBits::Camellia192,
+                "256" => CamelliaKeyBits::Camellia256,
+                _ => {
+                    return Err(format!(
+                        "unsupported Camellia key size: {} (expected 128, 192, or 256)",
+                        parts[1]
+                    ));
+                }
+            };
+            let mode = parse_symmetric_mode(parts[2])?;
+            if mode == SymmetricMode::Null {
+                return Err(format!("unsupported Camellia symmetric mode: {}", parts[2]));
+            };
+            Ok(SymmetricDefinition::Camellia { key_bits, mode })
+        }
+        "xor" => {
+            if parts.len() != 2 {
+                return Err(format!(
+                    "expected 'xor-<hash>' (e.g. xor-sha256), got: '{s}'"
+                ));
+            }
+            let hashing_algorithm = parse_hashing_algorithm(parts[1])?;
+            Ok(SymmetricDefinition::Xor { hashing_algorithm })
+        }
         _ => Err(format!(
-            "unsupported symmetric definition: {s} (supported: aes128cfb, aes256cfb, xor, null)"
+            "unsupported symmetric algorithm: '{}'; expected aes, sm4, camellia, xor, or null",
+            parts[0]
         )),
     }
 }
@@ -568,4 +678,88 @@ pub fn parse_tpm2_operation(s: &str) -> Result<u16, String> {
             "unknown operation: {s}; expected eq/neq/sgt/ugt/slt/ult/sge/uge/sle/ule/bs/bc"
         )),
     }
+}
+
+// ===========================================================================
+// Tests
+// ===========================================================================
+
+#[test]
+fn symdef_aes_256_cbc() {
+    let def = parse_symmetric_definition("aes-256-cbc").unwrap();
+    assert!(matches!(
+        def,
+        SymmetricDefinition::Aes {
+            key_bits: AesKeyBits::Aes256,
+            mode: SymmetricMode::Cbc,
+        }
+    ));
+}
+
+#[test]
+fn symdef_camellia_192_ecb() {
+    let def = parse_symmetric_definition("camellia-192-ecb").unwrap();
+    assert!(matches!(
+        def,
+        SymmetricDefinition::Camellia {
+            key_bits: CamelliaKeyBits::Camellia192,
+            mode: SymmetricMode::Ecb,
+        }
+    ));
+}
+
+#[test]
+fn symdef_xor_sha1() {
+    let def = parse_symmetric_definition("xor-sha1").unwrap();
+    assert!(matches!(
+        def,
+        SymmetricDefinition::Xor {
+            hashing_algorithm: HashingAlgorithm::Sha1,
+        }
+    ));
+}
+
+// Legacy shorthand forms
+#[test]
+fn symdef_aes128cfb() {
+    let def = parse_symmetric_definition("aes128cfb").unwrap();
+    assert!(matches!(def, SymmetricDefinition::AES_128_CFB));
+}
+
+#[test]
+fn symdef_aes256cfb() {
+    let def = parse_symmetric_definition("aes256cfb").unwrap();
+    assert!(matches!(def, SymmetricDefinition::AES_256_CFB));
+}
+
+#[test]
+fn symdef_xor() {
+    let def = parse_symmetric_definition("xor").unwrap();
+    assert!(matches!(
+        def,
+        SymmetricDefinition::Xor {
+            hashing_algorithm: HashingAlgorithm::Sha256,
+        }
+    ));
+}
+
+// Error cases
+#[test]
+fn symdef_unknown_algo() {
+    assert!(parse_symmetric_definition("foobar-128-cfb").is_err());
+}
+
+#[test]
+fn symdef_aes_128_with_invalid_null_mode() {
+    assert!(parse_symmetric_definition("aes-128-null").is_err());
+}
+
+#[test]
+fn symdef_sm4_cbc_with_unavailable_192_bits() {
+    assert!(parse_symmetric_definition("sm4-192-cbc").is_err());
+}
+
+#[test]
+fn symdef_empty_string() {
+    assert!(parse_symmetric_definition("").is_err());
 }
