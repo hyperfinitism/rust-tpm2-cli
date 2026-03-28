@@ -42,7 +42,7 @@ pub struct StartAuthSessionCmd {
     #[arg(long = "audit-session", conflicts_with_all = ["policy_session", "hmac_session"])]
     pub audit_session: bool,
 
-    /// Symmetric algorithm for session encryption (aes128cfb, aes256cfb, xor, null)
+    /// Symmetric algorithm for session encryption (e.g. aes-128-cfb, sm4-128-cfb, camellia-256-cbc, xor-sha256, null)
     #[arg(long = "symmetric", default_value = "aes128cfb", value_parser = parse::parse_symmetric_definition)]
     pub symmetric: SymmetricDefinition,
 
