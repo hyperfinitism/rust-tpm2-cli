@@ -16,7 +16,7 @@ runs:
       run: |
         git clone --depth 1 https://github.com/tpm2-software/tpm2-tss
         cd tpm2-tss
-        git tag "4.1.999" # Dummy version
+        git tag "4.1.999" # Fake version
         ./bootstrap
         ./configure --prefix=/usr \
           --disable-fapi --disable-weakcrypto --disable-integration

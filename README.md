@@ -22,9 +22,13 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 ```
 
-`rust-tpm2-cli` targets the latest `tpm2-tss`'s main branch, which includes significant updates beyond the 4.1.3 release (e.g. Unix domain socket support for the swtpm TCTI).
-However, as of now, the next version (v4.2.0) has not yet been released.
-To build [tpm2-tss](https://github.com/tpm2-software/tpm2-tss) from source:
+`rust-tpm2-cli` targets the unreleased nightly version [tpm2-tss](https://github.com/tpm2-software/tpm2-tss), which includes significant updates beyond the 4.1.3 release (e.g. Unix domain socket support for the swtpm TCTI).
+To build `tpm2-tss` from source:
+
+> [!WARNING]
+> The steps below install a locally-built nightly snapshot under `/usr` with a **fake version tag** (`4.1.999`).
+> This may conflict with a distro-packaged `tpm2-tss` or with future upstream releases, as a package manager may refuse to downgrade from the fake version `4.1.999` to an official but lower version number (e.g., v4.1.4).
+> Once an official release with these features is available in your distribution's packages, you can simply install `tpm2-tss` by running `sudo apt install -y libtss2-dev`.
 
 ```bash
 # Install build dependencies
@@ -37,7 +41,7 @@ sudo apt install -y \
 # Clone latest main and build
 git clone --depth 1 https://github.com/tpm2-software/tpm2-tss
 cd tpm2-tss
-git tag "4.1.999" # Dummy version
+git tag "4.1.999" # Fake version
 ./bootstrap
 ./configure --prefix=/usr \
     --disable-fapi --disable-weakcrypto --disable-integration
