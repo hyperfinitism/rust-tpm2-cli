@@ -6,12 +6,14 @@ on:
       - 'src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.github/actions/install-tpm2-tss/**'
       - '.github/workflows/build.yml'
   push:
     paths:
       - 'src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.github/actions/install-tpm2-tss/**'
       - '.github/workflows/build.yml'
   workflow_dispatch:
 

@@ -1,4 +1,4 @@
-name: Integration Tests
+name: Test
 
 on:
   push:
@@ -7,6 +7,7 @@ on:
       - 'tests/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.github/actions/install-tpm2-tss/**'
       - '.github/workflows/test.yml'
   pull_request:
     paths:
@@ -14,6 +15,7 @@ on:
       - 'tests/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.github/actions/install-tpm2-tss/**'
       - '.github/workflows/test.yml'
   workflow_dispatch:
 
@@ -28,7 +30,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  integration-test:
+  test:
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -56,7 +58,7 @@ jobs:
       # - run: sudo apt-get update && sudo apt-get install -y libtss2-dev pkg-config
       - name: Install swtpm
         run: sudo apt-get install -y swtpm
-      - name: Run integration tests
+      - name: Run cargo test --all-targets
         env:
           TSS2_ESYS_STATIC: 1
           TSS2_SYS_STATIC: 1

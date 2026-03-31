@@ -1,4 +1,4 @@
-name: Lint (Rust)
+name: Lint
 
 on:
   pull_request:
@@ -6,12 +6,14 @@ on:
       - 'src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.github/actions/install-tpm2-tss/**'
       - '.github/workflows/lint.yml'
   push:
     paths:
       - 'src/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - '.github/actions/install-tpm2-tss/**'
       - '.github/workflows/lint.yml'
   workflow_dispatch:
 
