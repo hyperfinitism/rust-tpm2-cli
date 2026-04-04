@@ -1,7 +1,7 @@
 # rust-tpm2-cli
 
 ![SemVer: pre-release](https://img.shields.io/badge/tpm2--cli-pre--release-ffc0cb)
-![MSRV: 1.90.0](https://img.shields.io/badge/MSRV-1.90.0-39c5bb.svg)
+![MSRV: 1.88.0](https://img.shields.io/badge/MSRV-1.88.0-39c5bb.svg)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-red.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 <div align="center"><img src="https://raw.githubusercontent.com/hyperfinitism/rust-tpm2-cli/main/assets/logo-two-colour.png" alt="Logo of rust-tpm2-cli" width="25%" height="25%"></div>
