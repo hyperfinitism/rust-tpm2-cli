@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Hierarchy & admin tests: clear, clearcontrol, dictionarylockout,
-//! setprimarypolicy, clockrateadjust, setclock, changeeps, changepps.
+//! setprimarypolicy, clockrateadjust, setclock, changeeps, changepps,
+//! hierarchycontrol, setcommandauditstatus, pcrallocate.
 
 mod common;
 
@@ -120,4 +121,41 @@ fn hierarchycontrol_enable() {
         .assert()
         .success();
     assert!(ek_ctx.exists());
+}
+
+// ── setcommandauditstatus ──────────────────────────────────────────
+
+#[test]
+fn setcommandauditstatus_set_and_clear() {
+    let s = SwtpmSession::new();
+    // TCG TPM 2.0 Spec requires the audit hash algorithm to be configured before
+    // commands can be added to the audit list. Initialize it first.
+    s.cmd("setcommandauditstatus")
+        .args(["-C", "o", "-g", "sha256"])
+        .assert()
+        .success();
+
+    // Set getrandom (0x0000017B) for audit.
+    s.cmd("setcommandauditstatus")
+        .args(["-C", "o", "-g", "sha256", "--set-list", "0x17B"])
+        .assert()
+        .success();
+
+    // Clear it.
+    s.cmd("setcommandauditstatus")
+        .args(["-C", "o", "-g", "sha256", "--clear-list", "0x17B"])
+        .assert()
+        .success();
+}
+
+// ── pcrallocate ────────────────────────────────────────────────────
+
+#[test]
+fn pcrallocate_sha256() {
+    let s = SwtpmSession::new();
+    // Allocate SHA-256 for PCRs 0-7 (platform auth).
+    s.cmd("pcrallocate")
+        .args(["-C", "p", "sha256:0,1,2,3,4,5,6,7"])
+        .assert()
+        .success();
 }
