@@ -17,18 +17,23 @@ The `rust-tpm2-cli` crate provides a suite of Rust-based command-line tools for 
 
 ### Install dependencies
 
+- [Rust](https://rust-lang.org/): v1.88.0 or later
+- [tpm2-tss](https://github.com/tpm2-software/tpm2-tss): v4.1.3 or later (C library)
+
+Install the latest Rust toolchain:
+
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 ```
 
-`rust-tpm2-cli` targets the unreleased nightly version [tpm2-tss](https://github.com/tpm2-software/tpm2-tss), which includes significant updates beyond the 4.1.3 release (e.g. Unix domain socket support for the swtpm TCTI).
-To build `tpm2-tss` from source:
+Install `tpm2-tss` from package manager (may be outdated):
 
-> [!WARNING]
-> The steps below install a locally-built nightly snapshot under `/usr` with a **fake version tag** (`4.1.999`).
-> This may conflict with a distro-packaged `tpm2-tss` or with future upstream releases, as a package manager may refuse to downgrade from the fake version `4.1.999` to an official but lower version number (e.g., v4.1.4).
-> Once an official release with these features is available in your distribution's packages, you can simply install `tpm2-tss` by running `sudo apt install -y libtss2-dev`.
+```bash
+sudo apt install -y libtss2-dev pkg-config
+```
+
+If the version of `tpm2-tss` available from the package manager is too old, build `tpm2-tss` from source:
 
 ```bash
 # Install build dependencies
@@ -39,9 +44,9 @@ sudo apt install -y \
     libjson-c-dev libltdl-dev libssl-dev libusb-1.0-0-dev uthash-dev uuid-dev
 
 # Clone latest main and build
-git clone --depth 1 https://github.com/tpm2-software/tpm2-tss
+git clone --filter=blob:none https://github.com/tpm2-software/tpm2-tss
 cd tpm2-tss
-git tag "4.1.999" # Fake version
+git checkout 30e6057722058cb85c292dcb7b77760ad6410d4e   # tag: 4.1.3
 ./bootstrap
 ./configure --prefix=/usr \
     --disable-fapi --disable-weakcrypto --disable-integration
@@ -57,7 +62,7 @@ See also [Installation instructions for tpm2-tss](https://github.com/tpm2-softwa
 ```bash
 git clone https://github.com/hyperfinitism/rust-tpm2-cli
 cd rust-tpm2-cli
-TSS2_ESYS_STATIC=1 TSS2_SYS_STATIC=1 TSS2_MU_STATIC=1 TSS2_TCTILDR_STATIC=1 cargo build --release
+cargo build --release
 # => ./target/release/tpm2
 ```
 
