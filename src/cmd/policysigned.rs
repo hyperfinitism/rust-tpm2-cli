@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
@@ -14,7 +15,7 @@ use tss_esapi::tss2_esys::TPMT_TK_AUTH;
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_object_from_source};
-use crate::parse::parse_context_source;
+use crate::parse::{parse_context_source, parse_duration};
 use crate::session::load_session_from_file;
 
 /// Authorize a policy with a signed authorization.
@@ -35,8 +36,8 @@ pub struct PolicySignedCmd {
     pub signature: PathBuf,
 
     /// Expiration time in seconds (0 = no expiration)
-    #[arg(short = 'x', long = "expiration", default_value = "0")]
-    pub expiration: i32,
+    #[arg(short = 'x', long = "expiration", value_parser = parse_duration, default_value = None)]
+    pub expiration: Option<Duration>,
 
     /// cpHash file (optional)
     #[arg(long = "cphash-input")]
@@ -89,12 +90,6 @@ impl PolicySignedCmd {
             None => Nonce::default(),
         };
 
-        let expiration = if self.expiration == 0 {
-            None
-        } else {
-            Some(std::time::Duration::from_secs(self.expiration as u64))
-        };
-
         let (timeout, ticket) = ctx
             .policy_signed(
                 policy_session,
@@ -102,7 +97,7 @@ impl PolicySignedCmd {
                 Nonce::default(), // nonce_tpm
                 cp_hash,
                 policy_ref,
-                expiration,
+                self.expiration,
                 signature,
             )
             .context("TPM2_PolicySigned failed")?;
