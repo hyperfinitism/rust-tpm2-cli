@@ -47,6 +47,21 @@ pub fn parse_hex_u32(s: &str) -> Result<u32, String> {
 }
 
 // ---------------------------------------------------------------------------
+// Duration
+// ---------------------------------------------------------------------------
+
+pub fn parse_duration(s: &str) -> Result<Option<std::time::Duration>, String> {
+    let secs: u64 = s
+        .parse()
+        .map_err(|_| format!("expected a u64 value, got: '{s}'"))?;
+    let duration = match secs {
+        0 => None,
+        _ => Some(std::time::Duration::from_secs(secs)),
+    };
+    Ok(duration)
+}
+
+// ---------------------------------------------------------------------------
 // Context source
 // ---------------------------------------------------------------------------
 

@@ -20,7 +20,7 @@ log = "0.4.29"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
-tss-esapi = { version = "8.0.0-alpha.2", features = ["serde"] }
+tss-esapi = { git = "https://github.com/parallaxsecond/rust-tss-esapi", rev = "2c36f103edb30320ec03e5d4b3ebe3eb58a2291f", features = ["serde"] }
 
 [dev-dependencies]
 assert_cmd = "2.2.0"
