@@ -3,9 +3,15 @@ name = "tpm2-cli"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88.0"
-license = "Apache-2.0"
+description = "Rust-based CLI tools for Trusted Platform Module 2.0"
+# documentation = ""
 readme = "README.md"
-exclude = [".gitignore", ".gitattributes", ".github/*"]
+# homepage = ""
+repository = "https://github.com/hyperfinitism/rust-tpm2-cli"
+license = "Apache-2.0"
+# keywords = []
+# categories = []
+include = ["src/**/*", "LICENSE"]
 
 [[bin]]
 name = "tpm2"
