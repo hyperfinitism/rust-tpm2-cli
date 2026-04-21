@@ -1,0 +1,9 @@
+*
+
+!assets/
+!src/
+!tests/
+!Cargo.lock
+!Cargo.toml
+!LICENSE
+!README.md
