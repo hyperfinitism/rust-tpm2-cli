@@ -6,12 +6,14 @@ use anyhow::Context;
 use clap::Parser;
 use log::info;
 
-use tss_esapi::structures::Auth;
+use tss_esapi::interface_types::session_handles::AuthSession;
+use tss_esapi::structures::{Auth, EccParameter, EccPoint, SensitiveData};
 
 use crate::cli::GlobalOpts;
+use crate::context::create_context;
 use crate::handle::ContextSource;
+use crate::handle::load_key_from_source;
 use crate::parse::{self, parse_context_source};
-use crate::raw_esys;
 
 /// Perform the first part of an ECC anonymous signing operation.
 ///
@@ -62,42 +64,59 @@ impl CommitCmd {
         let p1 = read_opt_file(&self.eccpoint_p)?;
         let s2 = read_opt_file(&self.basepoint_x)?;
         let y2 = read_opt_file(&self.basepoint_y)?;
+        let mut ctx = create_context(global.tcti.as_deref())?;
+        let sign_handle = load_key_from_source(&mut ctx, &self.context)?;
 
-        let result = raw_esys::commit(
-            global.tcti.as_deref(),
-            &self.context,
-            self.auth.as_ref(),
-            p1.as_deref(),
-            s2.as_deref(),
-            y2.as_deref(),
-        )
-        .context("TPM2_Commit failed")?;
+        if let Some(ref auth) = self.auth {
+            ctx.tr_set_auth(sign_handle.into(), auth.clone())
+                .context("failed to set signing key auth")?;
+        }
+
+        let p1 = p1
+            .map(|data| bytes_to_ecc_point(&data))
+            .transpose()
+            .map_err(|e| anyhow::anyhow!("p1 parameter: {e}"))?;
+        let s2 = s2
+            .map(SensitiveData::try_from)
+            .transpose()
+            .map_err(|e| anyhow::anyhow!("s2 parameter: {e}"))?;
+        let y2 = y2
+            .map(EccParameter::try_from)
+            .transpose()
+            .map_err(|e| anyhow::anyhow!("y2 parameter: {e}"))?;
+
+        ctx.set_sessions((Some(AuthSession::Password), None, None));
+        let result = ctx
+            .commit(sign_handle, p1, s2, y2)
+            .map_err(|e| anyhow::anyhow!(e));
+        ctx.clear_sessions();
+        let (k, l, e, counter) = result.context("TPM2_Commit failed")?;
 
         if let Some(ref path) = self.eccpoint_k {
-            std::fs::write(path, &result.k)
+            std::fs::write(path, ecc_point_to_bytes(&k))
                 .with_context(|| format!("writing K to {}", path.display()))?;
             info!("ECC point K saved to {}", path.display());
         }
 
         if let Some(ref path) = self.eccpoint_l {
-            std::fs::write(path, &result.l)
+            std::fs::write(path, ecc_point_to_bytes(&l))
                 .with_context(|| format!("writing L to {}", path.display()))?;
             info!("ECC point L saved to {}", path.display());
         }
 
         if let Some(ref path) = self.eccpoint_e {
-            std::fs::write(path, &result.e)
+            std::fs::write(path, ecc_point_to_bytes(&e))
                 .with_context(|| format!("writing E to {}", path.display()))?;
             info!("ECC point E saved to {}", path.display());
         }
 
         if let Some(ref path) = self.counter {
-            std::fs::write(path, result.counter.to_le_bytes())
+            std::fs::write(path, counter.to_le_bytes())
                 .with_context(|| format!("writing counter to {}", path.display()))?;
             info!("counter saved to {}", path.display());
         }
 
-        info!("commit succeeded (counter={})", result.counter);
+        info!("commit succeeded (counter={counter})");
         Ok(())
     }
 }
@@ -110,4 +129,18 @@ fn read_opt_file(path: &Option<PathBuf>) -> anyhow::Result<Option<Vec<u8>>> {
         }
         None => Ok(None),
     }
+}
+
+fn bytes_to_ecc_point(data: &[u8]) -> tss_esapi::Result<EccPoint> {
+    let half = data.len() / 2;
+    let x = EccParameter::try_from(data[..half].to_vec())?;
+    let y = EccParameter::try_from(data[half..].to_vec())?;
+    Ok(EccPoint::new(x, y))
+}
+
+fn ecc_point_to_bytes(point: &EccPoint) -> Vec<u8> {
+    let mut out = Vec::with_capacity(point.x().len() + point.y().len());
+    out.extend_from_slice(point.x().as_bytes());
+    out.extend_from_slice(point.y().as_bytes());
+    out
 }

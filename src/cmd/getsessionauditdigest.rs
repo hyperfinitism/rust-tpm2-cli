@@ -2,16 +2,21 @@
 
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::constants::tss::*;
+use tss_esapi::constants::SessionType;
+use tss_esapi::handles::{ObjectHandle, SessionHandle};
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
+use tss_esapi::interface_types::session_handles::AuthSession;
 use tss_esapi::structures::{Auth, Data};
-use tss_esapi::tss2_esys::*;
+use tss_esapi::traits::Marshall;
 
 use crate::cli::GlobalOpts;
-use crate::handle::ContextSource;
+use crate::context::create_context;
+use crate::handle::{ContextSource, load_key_from_source};
 use crate::parse::{self, parse_context_source};
-use crate::raw_esys::{self, RawEsysContext};
+use crate::session::load_session_from_file;
 
 /// Get the session audit digest signed by a key.
 ///
@@ -53,71 +58,81 @@ pub struct GetSessionAuditDigestCmd {
 
 impl GetSessionAuditDigestCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
-        let privacy_handle = self.privacy_admin;
-        let sign_handle = raw.resolve_handle_from_source(&self.signing_key_context)?;
+        let mut ctx = create_context(global.tcti.as_deref())?;
+        let privacy_handle = object_handle_from_esys_hierarchy(self.privacy_admin)?;
+        let sign_handle = load_key_from_source(&mut ctx, &self.signing_key_context)?;
 
-        // Load session via raw context_load
-        let session_handle = raw.context_load(
-            self.session
-                .to_str()
-                .ok_or_else(|| anyhow::anyhow!("invalid session path"))?,
-        )?;
+        let audit_session = load_session_from_file(&mut ctx, &self.session, SessionType::Hmac)?;
+        let session_handle = SessionHandle::from(audit_session);
 
         if let Some(ref auth) = self.hierarchy_auth {
-            raw.set_auth(privacy_handle, auth.as_bytes())?;
+            ctx.tr_set_auth(privacy_handle, auth.clone())
+                .context("failed to set privacy hierarchy auth")?;
         }
         if let Some(ref auth) = self.signing_key_auth {
-            raw.set_auth(sign_handle, auth.as_bytes())?;
+            ctx.tr_set_auth(sign_handle.into(), auth.clone())
+                .context("failed to set signing key auth")?;
         }
 
-        let qualifying_data: TPM2B_DATA = match &self.qualification {
+        let qualifying_data = match &self.qualification {
             Some(bytes) => Data::try_from(bytes.as_slice().to_vec())
-                .map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?
-                .into(),
-            None => TPM2B_DATA::default(),
+                .map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?,
+            None => Data::default(),
         };
 
-        let scheme = TPMT_SIG_SCHEME {
-            scheme: TPM2_ALG_NULL,
-            details: Default::default(),
-        };
+        let scheme = parse::parse_signature_scheme("null", HashingAlgorithm::Sha256)
+            .map_err(anyhow::Error::msg)?;
 
-        unsafe {
-            let mut audit_info: *mut TPM2B_ATTEST = std::ptr::null_mut();
-            let mut sig: *mut TPMT_SIGNATURE = std::ptr::null_mut();
-
-            let rc = Esys_GetSessionAuditDigest(
-                raw.ptr(),
+        ctx.set_sessions((
+            Some(AuthSession::Password),
+            Some(AuthSession::Password),
+            None,
+        ));
+        let result = ctx
+            .get_session_audit_digest(
                 privacy_handle,
                 sign_handle,
                 session_handle,
-                ESYS_TR_PASSWORD,
-                ESYS_TR_PASSWORD,
-                ESYS_TR_NONE,
-                &qualifying_data,
-                &scheme,
-                &mut audit_info,
-                &mut sig,
-            );
-            if rc != 0 {
-                anyhow::bail!("Esys_GetSessionAuditDigest failed: 0x{rc:08x}");
-            }
+                qualifying_data,
+                scheme,
+            )
+            .map_err(|e| anyhow::anyhow!(e));
+        ctx.clear_sessions();
+        let (attest, signature) = result.context("TPM2_GetSessionAuditDigest failed")?;
 
-            if let Some(ref path) = self.attestation {
-                raw_esys::write_raw_attestation(audit_info, path)?;
-                info!("session audit attestation saved to {}", path.display());
-            }
-            if let Some(ref path) = self.signature {
-                raw_esys::write_raw_signature(sig, path)?;
-                info!("signature saved to {}", path.display());
-            }
+        if let Some(ref path) = self.attestation {
+            let bytes = attest.marshall().context("failed to marshal TPMS_ATTEST")?;
+            std::fs::write(path, &bytes)
+                .with_context(|| format!("writing attestation to {}", path.display()))?;
+            info!("session audit attestation saved to {}", path.display());
+        }
 
-            Esys_Free(audit_info as *mut _);
-            Esys_Free(sig as *mut _);
+        if let Some(ref path) = self.signature {
+            let bytes = signature
+                .marshall()
+                .context("failed to marshal TPMT_SIGNATURE")?;
+            std::fs::write(path, &bytes)
+                .with_context(|| format!("writing signature to {}", path.display()))?;
+            info!("signature saved to {}", path.display());
         }
 
         info!("session audit digest retrieved");
         Ok(())
+    }
+}
+
+fn object_handle_from_esys_hierarchy(handle: u32) -> anyhow::Result<ObjectHandle> {
+    use tss_esapi::tss2_esys::{
+        ESYS_TR_RH_ENDORSEMENT, ESYS_TR_RH_LOCKOUT, ESYS_TR_RH_NULL, ESYS_TR_RH_OWNER,
+        ESYS_TR_RH_PLATFORM,
+    };
+
+    match handle {
+        ESYS_TR_RH_OWNER => Ok(ObjectHandle::Owner),
+        ESYS_TR_RH_PLATFORM => Ok(ObjectHandle::Platform),
+        ESYS_TR_RH_ENDORSEMENT => Ok(ObjectHandle::Endorsement),
+        ESYS_TR_RH_NULL => Ok(ObjectHandle::Null),
+        ESYS_TR_RH_LOCKOUT => Ok(ObjectHandle::Lockout),
+        _ => anyhow::bail!("unsupported privacy admin hierarchy: 0x{handle:08x}"),
     }
 }

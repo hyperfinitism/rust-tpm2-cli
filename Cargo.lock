@@ -126,9 +126,23 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "bitfield"
-version = "0.17.0"
+version = "0.19.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f798d2d157e547aa99aab0967df39edd0b70307312b6f8bd2848e6abe40896e0"
+checksum = "21ba6517c6b0f2bf08be60e187ab64b038438f22dd755614d8fe4d4098c46419"
+dependencies = [
+ "bitfield-macros",
+]
+
+[[package]]
+name = "bitfield-macros"
+version = "0.19.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f48d6ace212fdf1b45fd6b566bb40808415344642b76c3224c07c8df9da81e97"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "bitflags"
@@ -751,9 +765,9 @@ dependencies = [
 
 [[package]]
 name = "pkg-config"
-version = "0.3.32"
+version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
+checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "predicates"
@@ -1103,7 +1117,7 @@ dependencies = [
 [[package]]
 name = "tss-esapi"
 version = "8.0.0-alpha.2"
-source = "git+https://github.com/parallaxsecond/rust-tss-esapi?rev=2c36f103edb30320ec03e5d4b3ebe3eb58a2291f#2c36f103edb30320ec03e5d4b3ebe3eb58a2291f"
+source = "git+https://github.com/parallaxsecond/rust-tss-esapi?rev=1807b275f8c7a34a46967c7f885594a750d9af48#1807b275f8c7a34a46967c7f885594a750d9af48"
 dependencies = [
  "bitfield",
  "cfg-if",
@@ -1130,8 +1144,8 @@ dependencies = [
 
 [[package]]
 name = "tss-esapi-sys"
-version = "0.6.0-alpha.2"
-source = "git+https://github.com/parallaxsecond/rust-tss-esapi?rev=2c36f103edb30320ec03e5d4b3ebe3eb58a2291f#2c36f103edb30320ec03e5d4b3ebe3eb58a2291f"
+version = "0.7.0-alpha.1"
+source = "git+https://github.com/parallaxsecond/rust-tss-esapi?rev=1807b275f8c7a34a46967c7f885594a750d9af48#1807b275f8c7a34a46967c7f885594a750d9af48"
 dependencies = [
  "cfg-if",
  "pkg-config",

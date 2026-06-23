@@ -5,16 +5,20 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
+use tss_esapi::handles::NvIndexTpmHandle;
+use tss_esapi::interface_types::reserved_handles::NvAuth;
+use tss_esapi::interface_types::session_handles::AuthSession;
 use tss_esapi::structures::Auth;
-use tss_esapi::tss2_esys::*;
+use tss_esapi::structures::MaxNvBuffer;
 
 use crate::cli::GlobalOpts;
+use crate::context::create_context;
+use crate::handle::resolve_nv_auth;
 use crate::parse::{self, NvAuthEntity};
-use crate::raw_esys::RawEsysContext;
 
 /// Extend an NV index with additional data.
 ///
-/// Wraps TPM2_NV_Extend (raw FFI).
+/// Wraps TPM2_NV_Extend.
 #[derive(Parser)]
 pub struct NvExtendCmd {
     /// NV index (hex, e.g. 0x01000001)
@@ -36,41 +40,34 @@ pub struct NvExtendCmd {
 
 impl NvExtendCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_deref())?;
 
         let nv_index_val =
             parse::parse_hex_u32(&self.nv_index).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let nv_handle = NvIndexTpmHandle::new(nv_index_val)
+            .map_err(|e| anyhow::anyhow!("invalid NV index 0x{nv_index_val:08x}: {e}"))?;
+        let tpm_handle: tss_esapi::handles::TpmHandle = nv_handle.into();
+        let nv_idx = ctx
+            .execute_without_session(|ctx| ctx.tr_from_tpm_public(tpm_handle))
+            .with_context(|| format!("failed to load NV index 0x{nv_index_val:08x}"))?;
 
-        let nv_handle = raw.tr_from_tpm_public(nv_index_val)?;
-
-        let auth_handle = RawEsysContext::resolve_nv_auth_entity(self.hierarchy, nv_handle);
+        let nv_auth = resolve_nv_auth(&mut ctx, nv_auth_entity_name(self.hierarchy), nv_handle)?;
 
         if let Some(ref auth) = self.auth {
-            raw.set_auth(auth_handle, auth.as_bytes())?;
+            set_nv_auth(&mut ctx, &nv_auth, auth)?;
         }
 
         let data = std::fs::read(&self.input)
             .with_context(|| format!("reading input from {}", self.input.display()))?;
+        let nv_data = MaxNvBuffer::try_from(data.clone())
+            .map_err(|e| anyhow::anyhow!("NV extend input: {e}"))?;
 
-        let mut nv_data = TPM2B_MAX_NV_BUFFER::default();
-        let len = data.len().min(nv_data.buffer.len());
-        nv_data.size = len as u16;
-        nv_data.buffer[..len].copy_from_slice(&data[..len]);
-
-        unsafe {
-            let rc = Esys_NV_Extend(
-                raw.ptr(),
-                auth_handle,
-                nv_handle,
-                ESYS_TR_PASSWORD,
-                ESYS_TR_NONE,
-                ESYS_TR_NONE,
-                &nv_data,
-            );
-            if rc != 0 {
-                anyhow::bail!("Esys_NV_Extend failed: 0x{rc:08x}");
-            }
-        }
+        ctx.set_sessions((Some(AuthSession::Password), None, None));
+        let result = ctx
+            .nv_extend(nv_auth, nv_idx.into(), nv_data)
+            .map_err(|e| anyhow::anyhow!(e));
+        ctx.clear_sessions();
+        result.context("TPM2_NV_Extend failed")?;
 
         info!(
             "NV index 0x{nv_index_val:08x} extended with {} bytes",
@@ -78,4 +75,30 @@ impl NvExtendCmd {
         );
         Ok(())
     }
+}
+
+fn nv_auth_entity_name(entity: NvAuthEntity) -> &'static str {
+    match entity {
+        NvAuthEntity::Owner => "owner",
+        NvAuthEntity::Platform => "platform",
+        NvAuthEntity::NvIndex => "index",
+    }
+}
+
+fn set_nv_auth(ctx: &mut tss_esapi::Context, nv_auth: &NvAuth, auth: &Auth) -> anyhow::Result<()> {
+    match nv_auth {
+        NvAuth::Owner => {
+            ctx.tr_set_auth(tss_esapi::handles::ObjectHandle::Owner, auth.clone())
+                .context("tr_set_auth failed")?;
+        }
+        NvAuth::Platform => {
+            ctx.tr_set_auth(tss_esapi::handles::ObjectHandle::Platform, auth.clone())
+                .context("tr_set_auth failed")?;
+        }
+        NvAuth::NvIndex(handle) => {
+            ctx.tr_set_auth((*handle).into(), auth.clone())
+                .context("tr_set_auth failed")?;
+        }
+    }
+    Ok(())
 }
