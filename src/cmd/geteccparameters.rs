@@ -2,10 +2,11 @@
 
 use clap::Parser;
 use serde_json::json;
-use tss_esapi::tss2_esys::*;
+use tss_esapi::tss2_esys::{TPMT_ECC_SCHEME, TPMT_KDF_SCHEME};
 
 use crate::cli::GlobalOpts;
-use crate::raw_esys::RawEsysContext;
+use crate::context::create_context;
+use crate::parse;
 
 /// Get the ECC curve parameters for a given curve.
 ///
@@ -19,59 +20,30 @@ pub struct GetEccParametersCmd {
 
 impl GetEccParametersCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_deref())?;
 
-        let curve_id = parse_ecc_curve(&self.curve)?;
+        let curve = parse::parse_ecc_curve(&self.curve).map_err(anyhow::Error::msg)?;
+        let params = ctx.ecc_parameters(curve).map_err(|e| anyhow::anyhow!(e))?;
+        let curve_id: u16 = params.curve_id().into();
+        let kdf: TPMT_KDF_SCHEME = (*params.kdf()).into();
+        let sign: TPMT_ECC_SCHEME = (*params.sign()).into();
 
-        unsafe {
-            let mut params: *mut TPMS_ALGORITHM_DETAIL_ECC = std::ptr::null_mut();
-            let rc = Esys_ECC_Parameters(
-                raw.ptr(),
-                ESYS_TR_NONE,
-                ESYS_TR_NONE,
-                ESYS_TR_NONE,
-                curve_id,
-                &mut params,
-            );
-            if rc != 0 {
-                anyhow::bail!("Esys_ECC_Parameters failed: 0x{rc:08x}");
-            }
+        let output = json!({
+            "curve_id": format!("0x{curve_id:04x}"),
+            "key_size": params.key_size(),
+            "kdf_scheme": format!("0x{:04x}", kdf.scheme),
+            "sign_scheme": format!("0x{:04x}", sign.scheme),
+            "p": hex::encode(params.p().as_bytes()),
+            "a": hex::encode(params.a().as_bytes()),
+            "b": hex::encode(params.b().as_bytes()),
+            "gX": hex::encode(params.g_x().as_bytes()),
+            "gY": hex::encode(params.g_y().as_bytes()),
+            "n": hex::encode(params.n().as_bytes()),
+            "h": hex::encode(params.h().as_bytes()),
+        });
 
-            let p = &*params;
-            let output = json!({
-                "curve_id": format!("0x{:04x}", p.curveID),
-                "key_size": p.keySize,
-                "kdf_scheme": format!("0x{:04x}", p.kdf.scheme),
-                "sign_scheme": format!("0x{:04x}", p.sign.scheme),
-                "p": hex::encode(&p.p.buffer[..p.p.size as usize]),
-                "a": hex::encode(&p.a.buffer[..p.a.size as usize]),
-                "b": hex::encode(&p.b.buffer[..p.b.size as usize]),
-                "gX": hex::encode(&p.gX.buffer[..p.gX.size as usize]),
-                "gY": hex::encode(&p.gY.buffer[..p.gY.size as usize]),
-                "n": hex::encode(&p.n.buffer[..p.n.size as usize]),
-                "h": hex::encode(&p.h.buffer[..p.h.size as usize]),
-            });
-
-            Esys_Free(params as *mut _);
-
-            println!("{}", serde_json::to_string_pretty(&output)?);
-        }
+        println!("{}", serde_json::to_string_pretty(&output)?);
 
         Ok(())
-    }
-}
-
-fn parse_ecc_curve(s: &str) -> anyhow::Result<u16> {
-    use tss_esapi::constants::tss::*;
-    match s.to_lowercase().as_str() {
-        "ecc192" | "nistp192" => Ok(TPM2_ECC_NIST_P192),
-        "ecc224" | "nistp224" => Ok(TPM2_ECC_NIST_P224),
-        "ecc256" | "nistp256" => Ok(TPM2_ECC_NIST_P256),
-        "ecc384" | "nistp384" => Ok(TPM2_ECC_NIST_P384),
-        "ecc521" | "nistp521" => Ok(TPM2_ECC_NIST_P521),
-        "bnp256" => Ok(TPM2_ECC_BN_P256),
-        "bnp638" => Ok(TPM2_ECC_BN_P638),
-        "sm2p256" | "sm2" => Ok(TPM2_ECC_SM2_P256),
-        _ => anyhow::bail!("unsupported ECC curve: {s}"),
     }
 }

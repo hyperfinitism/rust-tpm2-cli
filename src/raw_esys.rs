@@ -2,13 +2,12 @@
 
 //! Raw ESYS FFI wrappers for TPM2 commands not yet in tss-esapi.
 //!
-//! tss-esapi 7.6.0 does not wrap `TPM2_Commit` or `TPM2_EC_Ephemeral`.
 //! This module calls the C ESAPI functions directly through tss-esapi-sys,
 //! managing its own raw `ESYS_CONTEXT`.
 
 use std::ffi::CString;
 use std::path::Path;
-use std::ptr::{null, null_mut};
+use std::ptr::null_mut;
 
 use anyhow::{Context, bail};
 use tss_esapi::tss2_esys::*;
@@ -173,136 +172,6 @@ impl Drop for RawEsysContext {
 }
 
 // -----------------------------------------------------------------------
-// TPM2_Commit
-// -----------------------------------------------------------------------
-
-/// Result of a TPM2_Commit operation.
-pub struct CommitResult {
-    pub k: Vec<u8>,
-    pub l: Vec<u8>,
-    pub e: Vec<u8>,
-    pub counter: u16,
-}
-
-/// Execute TPM2_Commit via raw ESYS FFI.
-pub fn commit(
-    tcti: Option<&str>,
-    key_context: &crate::handle::ContextSource,
-    auth: Option<&tss_esapi::structures::Auth>,
-    p1: Option<&[u8]>,
-    s2: Option<&[u8]>,
-    y2: Option<&[u8]>,
-) -> anyhow::Result<CommitResult> {
-    let mut raw = RawEsysContext::new(tcti)?;
-    let sign_handle = raw.resolve_handle_from_source(key_context)?;
-
-    // Set auth on the key if provided.
-    if let Some(auth) = auth {
-        unsafe {
-            let mut tpm2b_auth = TPM2B_AUTH {
-                size: auth.as_bytes().len() as u16,
-                ..Default::default()
-            };
-            tpm2b_auth.buffer[..auth.as_bytes().len()].copy_from_slice(auth.as_bytes());
-            let rc = Esys_TR_SetAuth(raw.ptr(), sign_handle, &tpm2b_auth);
-            if rc != 0 {
-                bail!("Esys_TR_SetAuth failed: 0x{rc:08x}");
-            }
-        }
-    }
-
-    // Build input structures.
-    let p1_struct = p1.map(bytes_to_ecc_point);
-    let s2_struct = s2.map(|data| {
-        let mut sd = TPM2B_SENSITIVE_DATA::default();
-        let len = data.len().min(sd.buffer.len());
-        sd.size = len as u16;
-        sd.buffer[..len].copy_from_slice(&data[..len]);
-        sd
-    });
-    let y2_struct = y2.map(|data| {
-        let mut ep = TPM2B_ECC_PARAMETER::default();
-        let len = data.len().min(ep.buffer.len());
-        ep.size = len as u16;
-        ep.buffer[..len].copy_from_slice(&data[..len]);
-        ep
-    });
-
-    let p1_ptr = p1_struct.as_ref().map_or(null(), |p| p as *const _);
-    let s2_ptr = s2_struct.as_ref().map_or(null(), |p| p as *const _);
-    let y2_ptr = y2_struct.as_ref().map_or(null(), |p| p as *const _);
-
-    unsafe {
-        let mut k_ptr: *mut TPM2B_ECC_POINT = null_mut();
-        let mut l_ptr: *mut TPM2B_ECC_POINT = null_mut();
-        let mut e_ptr: *mut TPM2B_ECC_POINT = null_mut();
-        let mut counter: u16 = 0;
-
-        let rc = Esys_Commit(
-            raw.ptr(),
-            sign_handle,
-            ESYS_TR_PASSWORD,
-            ESYS_TR_NONE,
-            ESYS_TR_NONE,
-            p1_ptr,
-            s2_ptr,
-            y2_ptr,
-            &mut k_ptr,
-            &mut l_ptr,
-            &mut e_ptr,
-            &mut counter,
-        );
-        if rc != 0 {
-            bail!("Esys_Commit failed: 0x{rc:08x}");
-        }
-
-        let k = ecc_point_ptr_to_bytes(k_ptr);
-        let l = ecc_point_ptr_to_bytes(l_ptr);
-        let e = ecc_point_ptr_to_bytes(e_ptr);
-
-        Esys_Free(k_ptr as *mut _);
-        Esys_Free(l_ptr as *mut _);
-        Esys_Free(e_ptr as *mut _);
-
-        Ok(CommitResult { k, l, e, counter })
-    }
-}
-
-// -----------------------------------------------------------------------
-// TPM2_EC_Ephemeral
-// -----------------------------------------------------------------------
-
-/// Execute TPM2_EC_Ephemeral via raw ESYS FFI.
-///
-/// Returns `(q_point_bytes, counter)`.
-pub fn ec_ephemeral(tcti: Option<&str>, curve_id: u16) -> anyhow::Result<(Vec<u8>, u16)> {
-    let mut raw = RawEsysContext::new(tcti)?;
-
-    unsafe {
-        let mut q_ptr: *mut TPM2B_ECC_POINT = null_mut();
-        let mut counter: u16 = 0;
-
-        let rc = Esys_EC_Ephemeral(
-            raw.ptr(),
-            ESYS_TR_NONE,
-            ESYS_TR_NONE,
-            ESYS_TR_NONE,
-            curve_id,
-            &mut q_ptr,
-            &mut counter,
-        );
-        if rc != 0 {
-            bail!("Esys_EC_Ephemeral failed: 0x{rc:08x}");
-        }
-
-        let q = ecc_point_ptr_to_bytes(q_ptr);
-        Esys_Free(q_ptr as *mut _);
-
-        Ok((q, counter))
-    }
-}
-
-// -----------------------------------------------------------------------
 // Attestation / signature output helpers
 // -----------------------------------------------------------------------
 
@@ -339,35 +208,4 @@ pub(crate) unsafe fn write_raw_signature(
     };
     crate::output::write_to_file(path, sig_bytes)
         .with_context(|| format!("writing signature to {}", path.display()))
-}
-
-// -----------------------------------------------------------------------
-// Helpers
-// -----------------------------------------------------------------------
-
-fn bytes_to_ecc_point(data: &[u8]) -> TPM2B_ECC_POINT {
-    let mut point = TPM2B_ECC_POINT::default();
-    // Split data in half: first half is x, second half is y.
-    let half = data.len() / 2;
-    let x = &data[..half];
-    let y = &data[half..];
-    point.point.x.size = x.len() as u16;
-    point.point.x.buffer[..x.len()].copy_from_slice(x);
-    point.point.y.size = y.len() as u16;
-    point.point.y.buffer[..y.len()].copy_from_slice(y);
-    point.size = std::mem::size_of::<TPMS_ECC_POINT>() as u16;
-    point
-}
-
-unsafe fn ecc_point_ptr_to_bytes(ptr: *mut TPM2B_ECC_POINT) -> Vec<u8> {
-    if ptr.is_null() {
-        return Vec::new();
-    }
-    let p = unsafe { &*ptr };
-    let x_len = p.point.x.size as usize;
-    let y_len = p.point.y.size as usize;
-    let mut out = Vec::with_capacity(x_len + y_len);
-    out.extend_from_slice(&p.point.x.buffer[..x_len]);
-    out.extend_from_slice(&p.point.y.buffer[..y_len]);
-    out
 }

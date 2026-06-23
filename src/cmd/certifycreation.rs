@@ -5,14 +5,16 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::constants::tss::*;
-use tss_esapi::structures::{Auth, Data};
-use tss_esapi::tss2_esys::*;
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
+use tss_esapi::interface_types::session_handles::AuthSession;
+use tss_esapi::structures::{Auth, CreationTicket, Data, Digest};
+use tss_esapi::traits::Marshall;
+use tss_esapi::tss2_esys::TPMT_TK_CREATION;
 
 use crate::cli::GlobalOpts;
-use crate::handle::ContextSource;
+use crate::context::create_context;
+use crate::handle::{ContextSource, load_key_from_source, load_object_from_source};
 use crate::parse::{self, parse_context_source};
-use crate::raw_esys::{self, RawEsysContext};
 
 /// Certify the creation data associated with an object.
 ///
@@ -59,12 +61,13 @@ pub struct CertifyCreationCmd {
 impl CertifyCreationCmd {
     #[allow(clippy::field_reassign_with_default)]
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
-        let sign_handle = raw.resolve_handle_from_source(&self.signing_context)?;
-        let obj_handle = raw.resolve_handle_from_source(&self.certified_context)?;
+        let mut ctx = create_context(global.tcti.as_deref())?;
+        let sign_handle = load_key_from_source(&mut ctx, &self.signing_context)?;
+        let obj_handle = load_object_from_source(&mut ctx, &self.certified_context)?;
 
         if let Some(ref auth) = self.signing_auth {
-            raw.set_auth(sign_handle, auth.as_bytes())?;
+            ctx.tr_set_auth(sign_handle.into(), auth.clone())
+                .context("failed to set signing key auth")?;
         }
 
         let creation_hash_data = std::fs::read(&self.creation_hash).with_context(|| {
@@ -73,10 +76,8 @@ impl CertifyCreationCmd {
                 self.creation_hash.display()
             )
         })?;
-        let mut creation_hash = TPM2B_DIGEST::default();
-        let len = creation_hash_data.len().min(creation_hash.buffer.len());
-        creation_hash.size = len as u16;
-        creation_hash.buffer[..len].copy_from_slice(&creation_hash_data[..len]);
+        let creation_hash = Digest::try_from(creation_hash_data)
+            .map_err(|e| anyhow::anyhow!("creation hash: {e}"))?;
 
         let ticket_data = std::fs::read(&self.ticket)
             .with_context(|| format!("reading ticket from {}", self.ticket.display()))?;
@@ -102,52 +103,46 @@ impl CertifyCreationCmd {
         } else {
             TPMT_TK_CREATION::default()
         };
+        let creation_ticket = CreationTicket::try_from(creation_ticket)
+            .map_err(|e| anyhow::anyhow!("creation ticket: {e}"))?;
 
-        let qualifying_data: TPM2B_DATA = match &self.qualification {
+        let qualifying_data = match &self.qualification {
             Some(bytes) => Data::try_from(bytes.as_slice().to_vec())
-                .map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?
-                .into(),
-            None => TPM2B_DATA::default(),
+                .map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?,
+            None => Data::default(),
         };
 
-        let in_scheme = TPMT_SIG_SCHEME {
-            scheme: TPM2_ALG_NULL,
-            ..Default::default()
-        };
+        let scheme = parse::parse_signature_scheme(&self.scheme, HashingAlgorithm::Sha256)
+            .map_err(anyhow::Error::msg)?;
 
-        unsafe {
-            let mut certify_info: *mut TPM2B_ATTEST = std::ptr::null_mut();
-            let mut sig: *mut TPMT_SIGNATURE = std::ptr::null_mut();
-
-            let rc = Esys_CertifyCreation(
-                raw.ptr(),
+        ctx.set_sessions((Some(AuthSession::Password), None, None));
+        let result = ctx
+            .certify_creation(
                 sign_handle,
                 obj_handle,
-                ESYS_TR_PASSWORD,
-                ESYS_TR_NONE,
-                ESYS_TR_NONE,
-                &qualifying_data,
-                &creation_hash,
-                &in_scheme,
-                &creation_ticket,
-                &mut certify_info,
-                &mut sig,
-            );
-            if rc != 0 {
-                anyhow::bail!("Esys_CertifyCreation failed: 0x{rc:08x}");
-            }
+                qualifying_data,
+                creation_hash,
+                scheme,
+                creation_ticket,
+            )
+            .map_err(|e| anyhow::anyhow!(e));
+        ctx.clear_sessions();
+        let (attest, signature) = result.context("TPM2_CertifyCreation failed")?;
 
-            if let Some(ref path) = self.attestation {
-                raw_esys::write_raw_attestation(certify_info, path)?;
-                info!("attestation saved to {}", path.display());
-            }
-            if let Some(ref path) = self.signature {
-                raw_esys::write_raw_signature(sig, path)?;
-                info!("signature saved to {}", path.display());
-            }
+        if let Some(ref path) = self.attestation {
+            let bytes = attest.marshall().context("failed to marshal TPMS_ATTEST")?;
+            std::fs::write(path, &bytes)
+                .with_context(|| format!("writing attestation to {}", path.display()))?;
+            info!("attestation saved to {}", path.display());
+        }
 
-            Esys_Free(certify_info as *mut _);
-            Esys_Free(sig as *mut _);
+        if let Some(ref path) = self.signature {
+            let bytes = signature
+                .marshall()
+                .context("failed to marshal TPMT_SIGNATURE")?;
+            std::fs::write(path, &bytes)
+                .with_context(|| format!("writing signature to {}", path.display()))?;
+            info!("signature saved to {}", path.display());
         }
 
         info!("certify creation succeeded");
