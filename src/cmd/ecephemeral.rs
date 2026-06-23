@@ -2,23 +2,20 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use clap::Parser;
 use log::info;
+use tss_esapi::interface_types::ecc::EccCurve;
 
 use crate::cli::GlobalOpts;
-use crate::raw_esys;
-
-/// Create an ephemeral key for two-phase key exchange.
-///
-/// Wraps TPM2_EC_Ephemeral: generates an ephemeral public point and
-/// counter for the given ECC curve.  Unlike ecdhkeygen, this does not
-/// require a loaded key.
+use crate::cmd::ecc::ecc_point_to_bytes;
+use crate::context::create_context;
+use crate::parse;
 #[derive(Parser)]
 pub struct EcEphemeralCmd {
     /// ECC curve (e.g. ecc256, ecc384, ecc521)
-    #[arg()]
-    pub curve: String,
+    #[arg(value_parser = parse::parse_ecc_curve)]
+    pub curve: EccCurve,
 
     /// Output file for the ephemeral public point Q
     #[arg(short = 'u', long = "public")]
@@ -31,10 +28,13 @@ pub struct EcEphemeralCmd {
 
 impl EcEphemeralCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let curve_id = parse_ecc_curve(&self.curve)?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
-        let (q_bytes, counter) = raw_esys::ec_ephemeral(global.tcti.as_deref(), curve_id)
+        let (q_point, counter) = ctx
+            .ec_ephemeral(self.curve)
+            .map_err(|e| anyhow::anyhow!(e))
             .context("TPM2_EC_Ephemeral failed")?;
+        let q_bytes = ecc_point_to_bytes(&q_point);
 
         std::fs::write(&self.public, &q_bytes)
             .with_context(|| format!("writing public point to {}", self.public.display()))?;
@@ -44,27 +44,12 @@ impl EcEphemeralCmd {
         );
 
         if let Some(ref path) = self.counter {
-            std::fs::write(path, counter.to_le_bytes())
+            std::fs::write(path, counter.to_be_bytes())
                 .with_context(|| format!("writing counter to {}", path.display()))?;
             info!("counter saved to {}", path.display());
         }
 
         info!("ec_ephemeral succeeded (counter={counter})");
         Ok(())
-    }
-}
-
-fn parse_ecc_curve(s: &str) -> anyhow::Result<u16> {
-    use tss_esapi::constants::tss::*;
-    match s.to_lowercase().as_str() {
-        "ecc192" | "nistp192" => Ok(TPM2_ECC_NIST_P192),
-        "ecc224" | "nistp224" => Ok(TPM2_ECC_NIST_P224),
-        "ecc256" | "nistp256" => Ok(TPM2_ECC_NIST_P256),
-        "ecc384" | "nistp384" => Ok(TPM2_ECC_NIST_P384),
-        "ecc521" | "nistp521" => Ok(TPM2_ECC_NIST_P521),
-        "bnp256" => Ok(TPM2_ECC_BN_P256),
-        "bnp638" => Ok(TPM2_ECC_BN_P638),
-        "sm2p256" | "sm2" => Ok(TPM2_ECC_SM2_P256),
-        _ => bail!("unsupported ECC curve: {s}"),
     }
 }

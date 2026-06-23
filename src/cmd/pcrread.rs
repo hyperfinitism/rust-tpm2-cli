@@ -13,17 +13,11 @@ use crate::context::create_context;
 use crate::output;
 use crate::parse;
 use crate::pcr;
-
-/// Read PCR values.
-///
-/// Specify PCR banks + indices like `sha256:0,1,2+sha1:0,1`.
-/// Use `all` for all indices in a bank: `sha256:all`.
-/// Without arguments reads all PCR banks.
 #[derive(Parser)]
 pub struct PcrReadCmd {
     /// PCR selection list (e.g. sha256:0,1,2+sha1:all)
-    #[arg(value_parser = parse::parse_pcr_selection)]
-    pub pcr_list: Option<PcrSelectionList>,
+    #[arg(default_value = "sha256:all+sha1:all", value_parser = parse::parse_pcr_selection)]
+    pub pcr_list: PcrSelectionList,
 
     /// Output binary PCR values to a file
     #[arg(short = 'o', long)]
@@ -32,18 +26,10 @@ pub struct PcrReadCmd {
 
 impl PcrReadCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
-        let selection = match &self.pcr_list {
-            Some(sel) => sel.clone(),
-            None => parse::default_pcr_selection().map_err(anyhow::Error::msg)?,
-        };
-
-        // TPM2_PCR_Read returns at most 8 digests per call; loop until all
-        // requested PCRs have been read.
+        let selection = self.pcr_list.clone();
         let chunks = pcr::pcr_read_all(&mut ctx, selection)?;
-
-        // Print results and optionally accumulate raw bytes for file output.
         let mut raw: Vec<u8> = Vec::new();
         for (read_sel, digests) in &chunks {
             let mut idx = 0;
@@ -64,8 +50,6 @@ impl PcrReadCmd {
                 }
             }
         }
-
-        // Optionally write raw binary of all digests to file
         if let Some(ref path) = self.output {
             output::write_to_file(path, &raw)?;
             info!("wrote PCR binary data to {}", path.display());

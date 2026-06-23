@@ -2,71 +2,65 @@
 
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::tss2_esys::*;
-
+use tss_esapi::constants::SessionType;
+use tss_esapi::handles::SessionHandle;
 use tss_esapi::structures::Auth;
 
 use crate::cli::GlobalOpts;
+use crate::context::create_context;
+use crate::handle::{load_nv_index, nv_auth_from_entity, set_nv_auth};
 use crate::parse::{self, NvAuthEntity};
-use crate::raw_esys::RawEsysContext;
-
-/// Assert policy using a policy stored in an NV index.
-///
-/// Wraps TPM2_PolicyAuthorizeNV (raw FFI).
+use crate::session::{load_optional_auth_session, load_session_from_file, save_session_and_forget};
 #[derive(Parser)]
 pub struct PolicyAuthorizeNvCmd {
-    /// Policy session context file
+    /// Policy session file
     #[arg(short = 'S', long = "session")]
     pub session: PathBuf,
 
     /// NV index containing the policy (hex, e.g. 0x01000001)
-    #[arg(short = 'i', long = "nv-index")]
-    pub nv_index: String,
+    #[arg(short = 'i', long = "nv-index", value_parser = parse::parse_nv_index)]
+    pub nv_index: tss_esapi::handles::NvIndexTpmHandle,
 
-    /// Auth hierarchy for the NV index (o/p/e or nv)
+    /// Authorization entity for the NV index (owner, platform, or nv-index)
     #[arg(short = 'C', long = "hierarchy", default_value = "o", value_parser = parse::parse_nv_auth_entity)]
     pub hierarchy: NvAuthEntity,
 
-    /// Auth value for the hierarchy
+    /// Authorization value for the hierarchy
     #[arg(short = 'P', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
+
+    /// Session context file for NV authorization
+    #[arg(long = "auth-session")]
+    pub auth_session: Option<PathBuf>,
 }
 
 impl PolicyAuthorizeNvCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
-        let session_handle = raw.context_load(
-            self.session
-                .to_str()
-                .ok_or_else(|| anyhow::anyhow!("invalid session path"))?,
-        )?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
+        let session = load_session_from_file(&mut ctx, &self.session, SessionType::Policy)?;
+        let policy_session = session
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("expected a policy session"))?;
 
-        let nv_handle = raw.resolve_nv_index(&self.nv_index)?;
+        let nv_handle = load_nv_index(&mut ctx, self.nv_index)?;
 
-        let auth_handle = RawEsysContext::resolve_nv_auth_entity(self.hierarchy, nv_handle);
+        let nv_auth = nv_auth_from_entity(self.hierarchy, nv_handle);
 
         if let Some(ref auth) = self.auth {
-            raw.set_auth(auth_handle, auth.as_bytes())?;
+            set_nv_auth(&mut ctx, nv_auth, auth.clone())?;
         }
 
-        unsafe {
-            let rc = Esys_PolicyAuthorizeNV(
-                raw.ptr(),
-                auth_handle,
-                nv_handle,
-                session_handle,
-                ESYS_TR_PASSWORD,
-                ESYS_TR_NONE,
-                ESYS_TR_NONE,
-            );
-            if rc != 0 {
-                anyhow::bail!("Esys_PolicyAuthorizeNV failed: 0x{rc:08x}");
-            }
-        }
+        let auth_session = load_optional_auth_session(&mut ctx, self.auth_session.as_deref())?;
+        ctx.execute_with_session(Some(auth_session), |ctx| {
+            ctx.policy_authorize_nv(policy_session, nv_auth, nv_handle)
+        })
+        .context("TPM2_PolicyAuthorizeNV failed")?;
 
-        raw.context_save_to_file(session_handle, &self.session)?;
+        let session_handle = SessionHandle::from(policy_session);
+        save_session_and_forget(ctx, session_handle, &self.session)?;
         info!("policy authorize NV asserted");
         Ok(())
     }

@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! PCR-specific TPM operations.
-//!
-//! Pure PCR argument parsers (selection strings, slot conversion, etc.) have
-//! moved to [`crate::parse`].  This module keeps only operations that require
-//! a live [`tss_esapi::Context`].
+//! PCR operations that require a live [`tss_esapi::Context`].
 
 use anyhow::Context;
 use tss_esapi::structures::{DigestList, PcrSelectionList};

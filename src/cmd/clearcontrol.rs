@@ -11,17 +11,13 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::parse;
 use crate::session::execute_with_optional_session;
-
-/// Enable or disable the TPM2_Clear command.
-///
-/// Wraps TPM2_ClearControl.
 #[derive(Parser)]
 pub struct ClearControlCmd {
-    /// Auth handle (p/platform or l/lockout)
-    #[arg(short = 'C', long = "hierarchy", value_parser = parse::parse_auth_handle)]
+    /// Authorization handle (p/platform or l/lockout)
+    #[arg(short = 'C', long = "hierarchy", value_parser = parse::parse_platform_or_lockout_auth_handle)]
     pub hierarchy: AuthHandle,
 
-    /// Auth value for the hierarchy
+    /// Authorization value for the hierarchy
     #[arg(short = 'P', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
 
@@ -29,14 +25,14 @@ pub struct ClearControlCmd {
     #[arg(short = 's', long = "disable-clear", default_value = "true")]
     pub disable: bool,
 
-    /// Session context file
+    /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
     pub session: Option<std::path::PathBuf>,
 }
 
 impl ClearControlCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         if let Some(ref auth) = self.auth {
             ctx.tr_set_auth(self.hierarchy.into(), auth.clone())

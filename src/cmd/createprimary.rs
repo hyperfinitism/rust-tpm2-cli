@@ -3,7 +3,7 @@
 use log::info;
 use std::path::PathBuf;
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use clap::Parser;
 use tss_esapi::attributes::ObjectAttributesBuilder;
 use tss_esapi::interface_types::algorithm::PublicAlgorithm;
@@ -11,9 +11,10 @@ use tss_esapi::interface_types::ecc::EccCurve;
 use tss_esapi::interface_types::key_bits::RsaKeyBits;
 use tss_esapi::structures::{
     Auth, Data, EccScheme, KeyDerivationFunctionScheme, PcrSelectionList, Public, PublicBuilder,
-    PublicEccParametersBuilder, PublicRsaParametersBuilder, RsaExponent, RsaScheme,
+    PublicEccParametersBuilder, PublicRsaParametersBuilder, RsaExponent, RsaScheme, SensitiveData,
     SymmetricDefinitionObject,
 };
+use tss_esapi::traits::UnMarshall;
 
 use tss_esapi::interface_types::algorithm::HashingAlgorithm;
 use tss_esapi::interface_types::reserved_handles::Hierarchy;
@@ -22,8 +23,6 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::parse;
 use crate::session::execute_with_optional_session;
-
-/// Create a primary key under a hierarchy.
 #[derive(Parser)]
 pub struct CreatePrimaryCmd {
     /// Hierarchy (o/owner, p/platform, e/endorsement, n/null)
@@ -31,10 +30,10 @@ pub struct CreatePrimaryCmd {
     pub hierarchy: Hierarchy,
 
     /// Key algorithm (rsa, ecc)
-    #[arg(short = 'G', long = "key-algorithm", default_value = "rsa")]
-    pub algorithm: String,
+    #[arg(short = 'G', long = "key-algorithm", default_value = "rsa", value_parser = parse::parse_asymmetric_algorithm)]
+    pub algorithm: parse::AsymmetricAlgorithm,
 
-    /// Hash algorithm (sha1, sha256, sha384, sha512)
+    /// Hash algorithm
     #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
     pub hash_algorithm: HashingAlgorithm,
 
@@ -42,13 +41,25 @@ pub struct CreatePrimaryCmd {
     #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
 
+    /// Authorization value for the hierarchy
+    #[arg(short = 'P', long = "hierarchy-auth", value_parser = parse::parse_auth)]
+    pub hierarchy_auth: Option<Auth>,
+
+    /// Input public template (marshaled TPM2B_PUBLIC)
+    #[arg(long = "template")]
+    pub template: Option<PathBuf>,
+
+    /// Sensitive data included in the primary object's sensitive area
+    #[arg(long = "sensitive-data", value_parser = parse::parse_sensitive_data)]
+    pub sensitive_data: Option<SensitiveData>,
+
     /// Output context file for the created primary key
     #[arg(short = 'c', long = "context")]
     pub context: Option<PathBuf>,
 
-    /// RSA key size in bits (default: 2048)
-    #[arg(long = "key-size", default_value = "2048")]
-    pub key_size: u16,
+    /// RSA key size in bits
+    #[arg(long = "key-size", default_value = "2048", value_parser = parse::parse_rsa_key_bits)]
+    pub key_size: RsaKeyBits,
 
     /// ECC curve (nistp256, nistp384, nistp521, sm2p256, etc.)
     #[arg(long = "ecc-curve", default_value = "nistp256", value_parser = parse::parse_ecc_curve)]
@@ -69,14 +80,26 @@ pub struct CreatePrimaryCmd {
 
 impl CreatePrimaryCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
-        let public = build_public(
-            &self.algorithm,
-            self.hash_algorithm,
-            self.key_size,
-            self.ecc_curve,
-        )?;
+        if let Some(auth) = &self.hierarchy_auth {
+            ctx.tr_set_auth(self.hierarchy.into(), auth.clone())
+                .context("failed to set hierarchy authorization")?;
+        }
+
+        let public = match &self.template {
+            Some(path) => {
+                let bytes = std::fs::read(path)
+                    .with_context(|| format!("reading public template from {}", path.display()))?;
+                Public::unmarshall(&bytes).context("invalid TPM2B_PUBLIC template")?
+            }
+            None => build_public(
+                self.algorithm,
+                self.hash_algorithm,
+                self.key_size,
+                self.ecc_curve,
+            )?,
+        };
 
         let session_path = self.session.as_deref();
         let result = execute_with_optional_session(&mut ctx, session_path, |ctx| {
@@ -84,7 +107,7 @@ impl CreatePrimaryCmd {
                 self.hierarchy,
                 public.clone(),
                 self.auth.clone(),
-                None, // initial_data
+                self.sensitive_data.clone(),
                 self.outside_info.clone(),
                 self.creation_pcr.clone(),
             )
@@ -92,8 +115,6 @@ impl CreatePrimaryCmd {
         .context("TPM2_CreatePrimary failed")?;
 
         info!("handle: 0x{:08x}", u32::from(result.key_handle));
-
-        // Save context if requested
         if let Some(ref path) = self.context {
             let saved = ctx
                 .context_save(result.key_handle.into())
@@ -108,9 +129,9 @@ impl CreatePrimaryCmd {
 }
 
 fn build_public(
-    alg: &str,
+    alg: parse::AsymmetricAlgorithm,
     hash_alg: tss_esapi::interface_types::algorithm::HashingAlgorithm,
-    key_size: u16,
+    key_size: RsaKeyBits,
     ecc_curve: EccCurve,
 ) -> anyhow::Result<Public> {
     let attributes = ObjectAttributesBuilder::new()
@@ -127,18 +148,11 @@ fn build_public(
         .with_name_hashing_algorithm(hash_alg)
         .with_object_attributes(attributes);
 
-    match alg.to_lowercase().as_str() {
-        "rsa" => {
-            let bits = match key_size {
-                1024 => RsaKeyBits::Rsa1024,
-                2048 => RsaKeyBits::Rsa2048,
-                3072 => RsaKeyBits::Rsa3072,
-                4096 => RsaKeyBits::Rsa4096,
-                _ => bail!("unsupported RSA key size: {key_size}"),
-            };
+    match alg {
+        parse::AsymmetricAlgorithm::Rsa => {
             let params = PublicRsaParametersBuilder::new()
                 .with_scheme(RsaScheme::Null)
-                .with_key_bits(bits)
+                .with_key_bits(key_size)
                 .with_exponent(RsaExponent::default())
                 .with_is_decryption_key(true)
                 .with_restricted(true)
@@ -153,7 +167,7 @@ fn build_public(
                 .build()
                 .context("failed to build RSA public")
         }
-        "ecc" => {
+        parse::AsymmetricAlgorithm::Ecc => {
             let params = PublicEccParametersBuilder::new()
                 .with_ecc_scheme(EccScheme::Null)
                 .with_curve(ecc_curve)
@@ -171,6 +185,5 @@ fn build_public(
                 .build()
                 .context("failed to build ECC public")
         }
-        _ => bail!("unsupported key algorithm: {alg}"),
     }
 }

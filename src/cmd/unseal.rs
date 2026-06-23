@@ -14,15 +14,13 @@ use crate::handle::{ContextSource, load_object_from_source};
 use crate::output;
 use crate::parse::{self, parse_context_source};
 use crate::session::execute_with_optional_session;
-
-/// Unseal data previously sealed to a TPM object.
 #[derive(Parser)]
 pub struct UnsealCmd {
     /// Sealed object context (file:<path> or hex:<handle>)
     #[arg(short = 'c', long = "context", value_parser = parse_context_source)]
     pub context: ContextSource,
 
-    /// Auth value for the sealed object
+    /// Authorization value for the sealed object
     #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
 
@@ -37,7 +35,7 @@ pub struct UnsealCmd {
 
 impl UnsealCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let obj_handle = load_object_from_source(&mut ctx, &self.context)?;
 

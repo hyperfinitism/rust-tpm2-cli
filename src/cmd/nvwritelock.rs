@@ -1,61 +1,51 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::tss2_esys::*;
-
 use tss_esapi::structures::Auth;
 
 use crate::cli::GlobalOpts;
+use crate::context::create_context;
+use crate::handle::{load_nv_index, nv_auth_from_entity, set_nv_auth};
 use crate::parse::{self, NvAuthEntity};
-use crate::raw_esys::RawEsysContext;
-
-/// Lock an NV index for writing (until next TPM reset).
-///
-/// Wraps TPM2_NV_WriteLock (raw FFI).
+use crate::session::execute_with_optional_session;
 #[derive(Parser)]
 pub struct NvWriteLockCmd {
     /// NV index (hex)
-    #[arg()]
-    pub nv_index: String,
+    #[arg(value_parser = parse::parse_nv_index)]
+    pub nv_index: tss_esapi::handles::NvIndexTpmHandle,
 
-    /// Authorization hierarchy (o/owner, p/platform)
+    /// Authorization entity for the NV index (owner, platform, or nv-index)
     #[arg(short = 'C', long = "hierarchy", default_value = "o", value_parser = parse::parse_nv_auth_entity)]
     pub hierarchy: NvAuthEntity,
 
-    /// Auth value
+    /// Authorization value
     #[arg(short = 'P', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
+
+    /// Session context file for authorization
+    #[arg(short = 'S', long = "session")]
+    pub session: Option<std::path::PathBuf>,
 }
 
 impl NvWriteLockCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
-        let nv_index_val =
-            parse::parse_hex_u32(&self.nv_index).map_err(|e| anyhow::anyhow!("{e}"))?;
-        let nv_handle = raw.tr_from_tpm_public(nv_index_val)?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
+        let nv_handle = load_nv_index(&mut ctx, self.nv_index)?;
 
-        let auth_handle = RawEsysContext::resolve_nv_auth_entity(self.hierarchy, nv_handle);
+        let nv_auth = nv_auth_from_entity(self.hierarchy, nv_handle);
 
         if let Some(ref auth) = self.auth {
-            raw.set_auth(auth_handle, auth.as_bytes())?;
+            set_nv_auth(&mut ctx, nv_auth, auth.clone())?;
         }
 
-        unsafe {
-            let rc = Esys_NV_WriteLock(
-                raw.ptr(),
-                auth_handle,
-                nv_handle,
-                ESYS_TR_PASSWORD,
-                ESYS_TR_NONE,
-                ESYS_TR_NONE,
-            );
-            if rc != 0 {
-                anyhow::bail!("Esys_NV_WriteLock failed: 0x{rc:08x}");
-            }
-        }
+        execute_with_optional_session(&mut ctx, self.session.as_deref(), |ctx| {
+            ctx.nv_write_lock(nv_auth, nv_handle)
+        })
+        .context("TPM2_NV_WriteLock failed")?;
 
-        info!("NV index 0x{nv_index_val:08x} write-locked");
+        info!("NV index 0x{:08x} write-locked", u32::from(self.nv_index));
         Ok(())
     }
 }

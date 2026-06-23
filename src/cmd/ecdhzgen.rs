@@ -2,28 +2,24 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::structures::{Auth, EccParameter, EccPoint};
+use tss_esapi::structures::Auth;
 
 use crate::cli::GlobalOpts;
+use crate::cmd::ecc::{bytes_to_ecc_point, ecc_point_to_bytes};
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
 use crate::parse::{self, parse_context_source};
 use crate::session::execute_with_optional_session;
-
-/// Compute a shared secret from an ECC key and a public point.
-///
-/// Wraps TPM2_ECDH_ZGen: uses the private portion of the loaded ECC
-/// key and the caller-supplied public point to compute the shared Z.
 #[derive(Parser)]
 pub struct EcdhZgenCmd {
     /// ECC key context (file:<path> or hex:<handle>)
     #[arg(short = 'c', long = "key-context", value_parser = parse_context_source)]
     pub key_context: ContextSource,
 
-    /// Auth value for the key
+    /// Authorization value for the key
     #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
 
@@ -35,14 +31,14 @@ pub struct EcdhZgenCmd {
     #[arg(short = 'o', long = "output")]
     pub output: PathBuf,
 
-    /// Session context file
+    /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
     pub session: Option<PathBuf>,
 }
 
 impl EcdhZgenCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let key_handle = load_key_from_source(&mut ctx, &self.key_context)?;
 
@@ -53,15 +49,7 @@ impl EcdhZgenCmd {
 
         let point_data = std::fs::read(&self.public)
             .with_context(|| format!("reading public point from {}", self.public.display()))?;
-        if point_data.len() < 2 {
-            bail!("public point file too short");
-        }
-        let half = point_data.len() / 2;
-        let x = EccParameter::try_from(point_data[..half].to_vec())
-            .map_err(|e| anyhow::anyhow!("invalid x coordinate: {e}"))?;
-        let y = EccParameter::try_from(point_data[half..].to_vec())
-            .map_err(|e| anyhow::anyhow!("invalid y coordinate: {e}"))?;
-        let in_point = EccPoint::new(x, y);
+        let in_point = bytes_to_ecc_point(&point_data)?;
 
         let session_path = self.session.as_deref();
         let z_point = execute_with_optional_session(&mut ctx, session_path, |ctx| {
@@ -69,11 +57,7 @@ impl EcdhZgenCmd {
         })
         .context("TPM2_ECDH_ZGen failed")?;
 
-        let mut z_bytes = Vec::new();
-        z_bytes.extend_from_slice(z_point.x().as_bytes());
-        z_bytes.extend_from_slice(z_point.y().as_bytes());
-
-        std::fs::write(&self.output, &z_bytes)
+        std::fs::write(&self.output, ecc_point_to_bytes(&z_point))
             .with_context(|| format!("writing Z point to {}", self.output.display()))?;
         info!("shared secret Z saved to {}", self.output.display());
 

@@ -1,96 +1,66 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::constants::tss::*;
-use tss_esapi::tss2_esys::*;
-
-use tss_esapi::structures::Auth;
+use tss_esapi::handles::AuthHandle;
+use tss_esapi::interface_types::algorithm::HashingAlgorithm;
+use tss_esapi::structures::{Auth, CommandCodeList};
 
 use crate::cli::GlobalOpts;
+use crate::context::create_context;
 use crate::parse;
-use crate::raw_esys::RawEsysContext;
-
-/// Set or clear the audit status for a command.
-///
-/// Wraps TPM2_SetCommandCodeAuditStatus (raw FFI).
+use crate::session::execute_with_optional_session;
 #[derive(Parser)]
 pub struct SetCommandAuditStatusCmd {
-    /// Auth hierarchy (o/owner or p/platform)
-    #[arg(short = 'C', long = "hierarchy", default_value = "o", value_parser = parse::parse_esys_hierarchy)]
-    pub hierarchy: u32,
+    /// Authorization hierarchy (owner or platform)
+    #[arg(short = 'C', long = "hierarchy", default_value = "o", value_parser = parse::parse_owner_or_platform_auth_handle)]
+    pub hierarchy: AuthHandle,
 
-    /// Auth value
+    /// Authorization value
     #[arg(short = 'P', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
 
     /// Hash algorithm for the audit digest
-    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256")]
-    pub hash_algorithm: String,
+    #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
+    pub hash_algorithm: HashingAlgorithm,
 
     /// Command codes to set for audit (comma-separated hex)
-    #[arg(long = "set-list")]
-    pub set_list: Option<String>,
+    #[arg(long = "set-list", value_parser = parse::parse_command_code_list)]
+    pub set_list: Option<CommandCodeList>,
 
     /// Command codes to clear from audit (comma-separated hex)
-    #[arg(long = "clear-list")]
-    pub clear_list: Option<String>,
+    #[arg(long = "clear-list", value_parser = parse::parse_command_code_list)]
+    pub clear_list: Option<CommandCodeList>,
+
+    /// Session context file for authorization
+    #[arg(short = 'S', long = "session")]
+    pub session: Option<std::path::PathBuf>,
 }
 
 impl SetCommandAuditStatusCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
-        let auth_handle = self.hierarchy;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         if let Some(ref auth) = self.auth {
-            raw.set_auth(auth_handle, auth.as_bytes())?;
+            ctx.tr_set_auth(self.hierarchy.into(), auth.clone())
+                .context("failed to set hierarchy authorization")?;
         }
 
-        let audit_alg: u16 = match self.hash_algorithm.to_lowercase().as_str() {
-            "sha1" => TPM2_ALG_SHA1,
-            "sha256" => TPM2_ALG_SHA256,
-            "sha384" => TPM2_ALG_SHA384,
-            "sha512" => TPM2_ALG_SHA512,
-            _ => anyhow::bail!("unknown hash algorithm: {}", self.hash_algorithm),
-        };
+        let set_list = self.set_list.clone().unwrap_or_default();
+        let clear_list = self.clear_list.clone().unwrap_or_default();
 
-        let set_list = parse_command_list(self.set_list.as_deref())?;
-        let clear_list = parse_command_list(self.clear_list.as_deref())?;
-
-        unsafe {
-            let rc = Esys_SetCommandCodeAuditStatus(
-                raw.ptr(),
-                auth_handle,
-                ESYS_TR_PASSWORD,
-                ESYS_TR_NONE,
-                ESYS_TR_NONE,
-                audit_alg,
-                &set_list,
-                &clear_list,
-            );
-            if rc != 0 {
-                anyhow::bail!("Esys_SetCommandCodeAuditStatus failed: 0x{rc:08x}");
-            }
-        }
+        execute_with_optional_session(&mut ctx, self.session.as_deref(), |ctx| {
+            ctx.set_command_code_audit_status(
+                self.hierarchy,
+                self.hash_algorithm,
+                set_list,
+                clear_list,
+            )
+        })
+        .context("TPM2_SetCommandCodeAuditStatus failed")?;
 
         info!("command audit status updated");
         Ok(())
     }
-}
-
-fn parse_command_list(s: Option<&str>) -> anyhow::Result<TPML_CC> {
-    let mut list = TPML_CC::default();
-    if let Some(codes) = s {
-        for code_str in codes.split(',') {
-            let stripped = code_str
-                .trim()
-                .strip_prefix("0x")
-                .unwrap_or(code_str.trim());
-            let code: u32 = u32::from_str_radix(stripped, 16)
-                .map_err(|_| anyhow::anyhow!("invalid command code: {code_str}"))?;
-            list.commandCodes[list.count as usize] = code;
-            list.count += 1;
-        }
-    }
-    Ok(list)
 }

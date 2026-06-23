@@ -10,17 +10,12 @@ use tss_esapi::constants::SessionType;
 use tss_esapi::handles::{ObjectHandle, SessionHandle};
 use tss_esapi::structures::{Digest, Nonce, Signature};
 use tss_esapi::traits::UnMarshall;
-use tss_esapi::tss2_esys::TPMT_TK_AUTH;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_object_from_source};
 use crate::parse::{parse_context_source, parse_duration};
 use crate::session::load_session_from_file;
-
-/// Authorize a policy with a signed authorization.
-///
-/// Wraps TPM2_PolicySigned.
 #[derive(Parser)]
 pub struct PolicySignedCmd {
     /// Policy session file
@@ -36,7 +31,7 @@ pub struct PolicySignedCmd {
     pub signature: PathBuf,
 
     /// Expiration time in seconds (0 = no expiration)
-    #[arg(short = 'x', long = "expiration", value_parser = parse_duration, default_value = None)]
+    #[arg(short = 'x', long = "expiration", value_parser = parse_duration)]
     pub expiration: Option<Duration>,
 
     /// cpHash file (optional)
@@ -46,6 +41,10 @@ pub struct PolicySignedCmd {
     /// Policy reference (digest) (hex:<hex_bytes> or file:<path>)
     #[arg(short = 'q', long = "qualification", value_parser = crate::parse::parse_qualification)]
     pub qualification: Option<crate::parse::Qualification>,
+
+    /// TPM nonce as hexadecimal bytes
+    #[arg(long = "nonce-tpm", value_parser = crate::parse::parse_hex_nonce)]
+    pub nonce_tpm: Option<Nonce>,
 
     /// Output file for the timeout
     #[arg(short = 't', long = "timeout")]
@@ -62,7 +61,7 @@ pub struct PolicySignedCmd {
 
 impl PolicySignedCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let session = load_session_from_file(&mut ctx, &self.session, SessionType::Policy)?;
         let policy_session = session
@@ -94,7 +93,7 @@ impl PolicySignedCmd {
             .policy_signed(
                 policy_session,
                 auth_object,
-                Nonce::default(), // nonce_tpm
+                self.nonce_tpm.clone().unwrap_or_default(),
                 cp_hash,
                 policy_ref,
                 self.expiration,
@@ -110,15 +109,7 @@ impl PolicySignedCmd {
         }
 
         if let Some(ref path) = self.ticket_out {
-            let tss_ticket: TPMT_TK_AUTH = ticket
-                .try_into()
-                .map_err(|e| anyhow::anyhow!("failed to convert ticket: {e:?}"))?;
-            let bytes = unsafe {
-                std::slice::from_raw_parts(
-                    &tss_ticket as *const TPMT_TK_AUTH as *const u8,
-                    std::mem::size_of::<TPMT_TK_AUTH>(),
-                )
-            };
+            let bytes = crate::ticket::marshall_ticket(&ticket);
             std::fs::write(path, bytes)
                 .with_context(|| format!("writing ticket to {}", path.display()))?;
         }

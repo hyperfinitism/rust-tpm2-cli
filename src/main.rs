@@ -12,6 +12,7 @@ mod pcr;
 mod raw_esys;
 mod session;
 mod tcti;
+mod ticket;
 
 use clap::Parser;
 use log::error;

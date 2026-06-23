@@ -3,21 +3,18 @@
 use std::io::Read;
 use std::path::PathBuf;
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use clap::Parser;
 use tss_esapi::structures::SavedTpmContext;
 use tss_esapi::structures::{Attest, AttestInfo, Public, PublicBuffer};
 use tss_esapi::traits::UnMarshall;
 
-/// Decode and display a TPM data structure.
-///
-/// Reads a binary TPM structure from a file (or stdin) and prints a
-/// human-readable representation to stdout.
+use crate::parse::{self, PrintStructureType};
 #[derive(Parser)]
 pub struct PrintCmd {
     /// Structure type to decode
-    #[arg(short = 't', long = "type")]
-    pub structure_type: String,
+    #[arg(short = 't', long = "type", value_parser = parse::parse_print_structure_type)]
+    pub structure_type: PrintStructureType,
 
     /// Input file (default: stdin)
     #[arg()]
@@ -28,15 +25,11 @@ impl PrintCmd {
     pub fn execute(&self, _global: &crate::cli::GlobalOpts) -> anyhow::Result<()> {
         let data = read_input(&self.input)?;
 
-        match self.structure_type.to_lowercase().as_str() {
-            "tpms_attest" => print_attest(&data)?,
-            "tpms_context" => print_context(&data)?,
-            "tpm2b_public" => print_tpm2b_public(&data)?,
-            "tpmt_public" => print_tpmt_public(&data)?,
-            other => bail!(
-                "unsupported type: {other}\n\
-                 supported types: TPMS_ATTEST, TPMS_CONTEXT, TPM2B_PUBLIC, TPMT_PUBLIC"
-            ),
+        match self.structure_type {
+            PrintStructureType::Attest => print_attest(&data)?,
+            PrintStructureType::Context => print_context(&data)?,
+            PrintStructureType::PublicBuffer => print_tpm2b_public(&data)?,
+            PrintStructureType::Public => print_tpmt_public(&data)?,
         }
 
         Ok(())

@@ -75,9 +75,9 @@ fn clockrateadjust_faster() {
 }
 
 #[test]
-fn setclock() {
+fn clockset() {
     let s = SwtpmSession::new();
-    s.cmd("setclock").arg("100000").assert().success();
+    s.cmd("clockset").arg("100000").assert().success();
 }
 
 #[test]
@@ -108,10 +108,7 @@ fn clear_after_clearcontrol_disable_fails() {
 fn hierarchycontrol_enable() {
     let s = SwtpmSession::new();
     // Enable endorsement hierarchy (already enabled, but validates command works).
-    s.cmd("hierarchycontrol")
-        .args(["-C", "p", "e"])
-        .assert()
-        .success();
+    s.cmd("hierarchycontrol").arg("e").assert().success();
 
     // Verify endorsement hierarchy is usable.
     let ek_ctx = s.tmp().path().join("ek.ctx");
@@ -155,7 +152,7 @@ fn pcrallocate_sha256() {
     let s = SwtpmSession::new();
     // Allocate SHA-256 for PCRs 0-7 (platform auth).
     s.cmd("pcrallocate")
-        .args(["-C", "p", "sha256:0,1,2,3,4,5,6,7"])
+        .arg("sha256:0,1,2,3,4,5,6,7")
         .assert()
         .success();
 }

@@ -9,17 +9,12 @@ use tss_esapi::attributes::SessionAttributesBuilder;
 use tss_esapi::constants::SessionType;
 use tss_esapi::handles::SessionHandle;
 use tss_esapi::interface_types::algorithm::HashingAlgorithm;
-use tss_esapi::structures::SymmetricDefinition;
+use tss_esapi::structures::{Auth, Nonce, SymmetricDefinition};
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_object_from_source};
 use crate::parse::{self, parse_context_source};
-
-/// Start a TPM authorization session and save the session context to a file.
-///
-/// The session can later be used for policy evaluation or HMAC-based
-/// authorization in other commands.
 #[derive(Parser)]
 pub struct StartAuthSessionCmd {
     /// Output file for the session context
@@ -50,6 +45,18 @@ pub struct StartAuthSessionCmd {
     #[arg(long = "bind", value_parser = parse_context_source)]
     pub bind: Option<ContextSource>,
 
+    /// Authorization value for the bound object
+    #[arg(long = "bind-auth", value_parser = parse::parse_auth, requires = "bind")]
+    pub bind_auth: Option<Auth>,
+
+    /// Key used to salt the session (file:<path> or hex:<handle>)
+    #[arg(long = "tpm-key", value_parser = parse_context_source)]
+    pub tpm_key: Option<ContextSource>,
+
+    /// Caller nonce as hexadecimal bytes
+    #[arg(long = "nonce-caller", value_parser = parse::parse_hex_nonce)]
+    pub nonce_caller: Option<Nonce>,
+
     /// Enable parameter encryption (encrypt flag on session)
     #[arg(long = "enable-encrypt")]
     pub enable_encrypt: bool,
@@ -61,7 +68,7 @@ pub struct StartAuthSessionCmd {
 
 impl StartAuthSessionCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let session_type = self.resolve_session_type();
 
@@ -69,20 +76,27 @@ impl StartAuthSessionCmd {
             Some(src) => Some(load_object_from_source(&mut ctx, src)?),
             None => None,
         };
+        if let (Some(handle), Some(auth)) = (bind_handle, &self.bind_auth) {
+            ctx.tr_set_auth(handle, auth.clone())
+                .context("failed to set bound object authorization")?;
+        }
+
+        let tpm_key = match &self.tpm_key {
+            Some(source) => Some(crate::handle::load_key_from_source(&mut ctx, source)?),
+            None => None,
+        };
 
         let session = ctx
             .start_auth_session(
-                None,
+                tpm_key,
                 bind_handle,
-                None,
+                self.nonce_caller.clone(),
                 session_type,
                 self.symmetric,
                 self.hash_algorithm,
             )
             .context("TPM2_StartAuthSession failed")?
             .ok_or_else(|| anyhow::anyhow!("no session returned"))?;
-
-        // Set session attributes if requested.
         if self.audit_session || self.enable_encrypt || self.enable_decrypt {
             let mut builder = SessionAttributesBuilder::new();
             if self.audit_session {
@@ -98,8 +112,6 @@ impl StartAuthSessionCmd {
             ctx.tr_sess_set_attributes(session, attrs, mask)
                 .context("failed to set session attributes")?;
         }
-
-        // Save the session context to file.
         let session_handle: SessionHandle = session.into();
         let handle: tss_esapi::handles::ObjectHandle = session_handle.into();
         crate::session::save_session_and_forget(ctx, handle, &self.session)?;

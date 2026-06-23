@@ -14,29 +14,25 @@ use crate::handle::{ContextSource, load_key_from_source};
 use crate::output;
 use crate::parse::{self, parse_context_source};
 use crate::session::execute_with_optional_session;
-
-/// Symmetric encryption or decryption using a TPM-loaded key.
-///
-/// Wraps TPM2_EncryptDecrypt2. Use `-d` for decryption, omit for encryption.
 #[derive(Parser)]
-pub struct EncryptDecryptCmd {
+pub struct EncryptDecrypt2Cmd {
     /// Key context (file:<path> or hex:<handle>)
     #[arg(short = 'c', long = "key-context", value_parser = parse_context_source)]
     pub key_context: ContextSource,
 
-    /// Auth value for the key
+    /// Authorization value for the key
     #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
 
-    /// Decrypt mode (default: encrypt)
+    /// Decrypt instead of encrypting
     #[arg(short = 'd', long = "decrypt")]
     pub decrypt: bool,
 
-    /// Cipher mode (cfb, cbc, ecb, ofb, ctr, null)
+    /// Symmetric mode (cfb, cbc, ecb, ofb, ctr, null)
     #[arg(short = 'G', long = "mode", default_value = "null", value_parser = parse::parse_symmetric_mode)]
     pub mode: SymmetricMode,
 
-    /// Initial value / IV input file
+    /// Input file for the initialization vector
     #[arg(short = 'i', long = "iv")]
     pub iv: Option<PathBuf>,
 
@@ -44,7 +40,7 @@ pub struct EncryptDecryptCmd {
     #[arg(short = 'o', long = "output")]
     pub output: PathBuf,
 
-    /// Output file for the IV out
+    /// Output file for the updated initialization vector
     #[arg(long = "iv-out")]
     pub iv_out: Option<PathBuf>,
 
@@ -52,63 +48,52 @@ pub struct EncryptDecryptCmd {
     #[arg()]
     pub input: PathBuf,
 
-    /// Session context file
+    /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
     pub session: Option<PathBuf>,
 }
 
-impl EncryptDecryptCmd {
+impl EncryptDecrypt2Cmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
         let key_handle = load_key_from_source(&mut ctx, &self.key_context)?;
 
-        if let Some(ref auth) = self.auth {
+        if let Some(auth) = &self.auth {
             ctx.tr_set_auth(key_handle.into(), auth.clone())
-                .context("tr_set_auth failed")?;
+                .context("failed to set key authorization")?;
         }
 
         let data = std::fs::read(&self.input)
             .with_context(|| format!("reading input from {}", self.input.display()))?;
-        let in_data =
+        let data =
             MaxBuffer::try_from(data).map_err(|e| anyhow::anyhow!("input too large: {e}"))?;
-
-        let iv_in = match &self.iv {
+        let iv = match &self.iv {
             Some(path) => {
-                let iv_data = std::fs::read(path)
+                let value = std::fs::read(path)
                     .with_context(|| format!("reading IV from {}", path.display()))?;
-                InitialValue::try_from(iv_data).map_err(|e| anyhow::anyhow!("invalid IV: {e}"))?
+                InitialValue::try_from(value).map_err(|e| anyhow::anyhow!("invalid IV: {e}"))?
             }
             None => InitialValue::default(),
         };
 
-        let session_path = self.session.as_deref();
-        let (out_data, iv_out) = execute_with_optional_session(&mut ctx, session_path, |ctx| {
-            ctx.encrypt_decrypt_2(
-                key_handle,
-                self.decrypt,
-                self.mode,
-                in_data.clone(),
-                iv_in.clone(),
-            )
-        })
-        .context("TPM2_EncryptDecrypt2 failed")?;
+        let (out_data, out_iv) =
+            execute_with_optional_session(&mut ctx, self.session.as_deref(), |ctx| {
+                ctx.encrypt_decrypt_2(
+                    key_handle,
+                    self.decrypt,
+                    self.mode,
+                    data.clone(),
+                    iv.clone(),
+                )
+            })
+            .context("TPM2_EncryptDecrypt2 failed")?;
 
         output::write_to_file(&self.output, out_data.as_bytes())?;
-        info!(
-            "{} data saved to {}",
-            if self.decrypt {
-                "decrypted"
-            } else {
-                "encrypted"
-            },
-            self.output.display()
-        );
-
-        if let Some(ref path) = self.iv_out {
-            output::write_to_file(path, iv_out.as_bytes())?;
-            info!("IV out saved to {}", path.display());
+        if let Some(path) = &self.iv_out {
+            output::write_to_file(path, out_iv.as_bytes())?;
         }
 
+        info!("symmetric operation completed");
         Ok(())
     }
 }

@@ -9,13 +9,11 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use tss_esapi::handles::{KeyHandle, NvIndexTpmHandle, ObjectHandle, TpmHandle};
+use tss_esapi::handles::{KeyHandle, NvIndexHandle, NvIndexTpmHandle, ObjectHandle, TpmHandle};
 use tss_esapi::interface_types::reserved_handles::NvAuth;
-use tss_esapi::structures::SavedTpmContext;
+use tss_esapi::structures::{Auth, SavedTpmContext};
 
-// ---------------------------------------------------------------------------
-// ContextSource — type-safe split of "hex handle vs. file path"
-// ---------------------------------------------------------------------------
+use crate::parse::NvAuthEntity;
 
 /// A resolved context source — either a file path or a raw hex handle.
 ///
@@ -27,7 +25,7 @@ pub enum ContextSource {
     /// A JSON context file path (from `file:<path>` syntax).
     File(PathBuf),
     /// A raw persistent TPM handle (from `hex:<handle>` syntax).
-    Handle(u32),
+    Handle(TpmHandle),
 }
 
 /// Load a [`KeyHandle`] from a [`ContextSource`].
@@ -36,11 +34,10 @@ pub fn load_key_from_source(
     src: &ContextSource,
 ) -> anyhow::Result<KeyHandle> {
     match src {
-        ContextSource::Handle(raw) => {
-            let tpm_handle = TpmHandle::try_from(*raw)
-                .map_err(|e| anyhow::anyhow!("invalid TPM handle 0x{raw:08x}: {e}"))?;
+        ContextSource::Handle(tpm_handle) => {
+            let raw = u32::from(*tpm_handle);
             let obj = ctx
-                .execute_without_session(|ctx| ctx.tr_from_tpm_public(tpm_handle))
+                .execute_without_session(|ctx| ctx.tr_from_tpm_public(*tpm_handle))
                 .with_context(|| format!("failed to load handle 0x{raw:08x}"))?;
             Ok(obj.into())
         }
@@ -54,11 +51,10 @@ pub fn load_object_from_source(
     src: &ContextSource,
 ) -> anyhow::Result<ObjectHandle> {
     match src {
-        ContextSource::Handle(raw) => {
-            let tpm_handle = TpmHandle::try_from(*raw)
-                .map_err(|e| anyhow::anyhow!("invalid TPM handle 0x{raw:08x}: {e}"))?;
+        ContextSource::Handle(tpm_handle) => {
+            let raw = u32::from(*tpm_handle);
             let obj = ctx
-                .execute_without_session(|ctx| ctx.tr_from_tpm_public(tpm_handle))
+                .execute_without_session(|ctx| ctx.tr_from_tpm_public(*tpm_handle))
                 .with_context(|| format!("failed to load handle 0x{raw:08x}"))?;
             Ok(obj)
         }
@@ -92,20 +88,51 @@ pub fn load_object_context_file(
     Ok(handle)
 }
 
+/// Load an NV index from its TPM handle.
+pub fn load_nv_index(
+    ctx: &mut tss_esapi::Context,
+    nv_tpm_handle: NvIndexTpmHandle,
+) -> anyhow::Result<NvIndexHandle> {
+    let raw = u32::from(nv_tpm_handle);
+    let tpm_handle: TpmHandle = nv_tpm_handle.into();
+    let object_handle = ctx
+        .execute_without_session(|ctx| ctx.tr_from_tpm_public(tpm_handle))
+        .with_context(|| format!("failed to load NV index 0x{raw:08x}"))?;
+    Ok(object_handle.into())
+}
+
+/// Convert the CLI NV authorization selector to the corresponding ESAPI type.
+pub fn nv_auth_from_entity(entity: NvAuthEntity, nv_handle: NvIndexHandle) -> NvAuth {
+    match entity {
+        NvAuthEntity::Owner => NvAuth::Owner,
+        NvAuthEntity::Platform => NvAuth::Platform,
+        NvAuthEntity::NvIndex => NvAuth::NvIndex(nv_handle),
+    }
+}
+
+/// Set the password associated with an NV authorization entity.
+pub fn set_nv_auth(
+    ctx: &mut tss_esapi::Context,
+    nv_auth: NvAuth,
+    auth: Auth,
+) -> anyhow::Result<()> {
+    let auth_handle = tss_esapi::handles::AuthHandle::from(nv_auth);
+    ctx.tr_set_auth(auth_handle.into(), auth)
+        .context("failed to set NV authorization")
+}
+
 /// Resolve the NV authorization entity for `nvread` / `nvwrite`.
 ///
-/// - `"o"` / `"owner"`    → [`NvAuth::Owner`]
-/// - `"p"` / `"platform"` → [`NvAuth::Platform`]
-/// - anything else        → load the NV index itself as the auth entity
+/// The selector has already been parsed and validated by clap.
 pub fn resolve_nv_auth(
     ctx: &mut tss_esapi::Context,
-    hierarchy: &str,
+    entity: NvAuthEntity,
     nv_handle: NvIndexTpmHandle,
 ) -> anyhow::Result<NvAuth> {
-    match hierarchy.to_lowercase().as_str() {
-        "o" | "owner" => Ok(NvAuth::Owner),
-        "p" | "platform" => Ok(NvAuth::Platform),
-        _ => {
+    match entity {
+        NvAuthEntity::Owner => Ok(NvAuth::Owner),
+        NvAuthEntity::Platform => Ok(NvAuth::Platform),
+        NvAuthEntity::NvIndex => {
             let tpm_handle: TpmHandle = nv_handle.into();
             let obj = ctx
                 .execute_without_session(|ctx| ctx.tr_from_tpm_public(tpm_handle))

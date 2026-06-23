@@ -5,75 +5,68 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
+use tss_esapi::handles::NvIndexTpmHandle;
 use tss_esapi::structures::Auth;
-use tss_esapi::tss2_esys::*;
+use tss_esapi::structures::MaxNvBuffer;
 
 use crate::cli::GlobalOpts;
+use crate::context::create_context;
+use crate::handle::{resolve_nv_auth, set_nv_auth};
 use crate::parse::{self, NvAuthEntity};
-use crate::raw_esys::RawEsysContext;
-
-/// Extend an NV index with additional data.
-///
-/// Wraps TPM2_NV_Extend (raw FFI).
+use crate::session::execute_with_optional_session;
 #[derive(Parser)]
 pub struct NvExtendCmd {
     /// NV index (hex, e.g. 0x01000001)
-    #[arg()]
-    pub nv_index: String,
+    #[arg(value_parser = parse::parse_nv_index)]
+    pub nv_index: NvIndexTpmHandle,
 
-    /// Authorization hierarchy (o/owner, p/platform) or "index"
+    /// Authorization entity for the NV index (owner, platform, or nv-index)
     #[arg(short = 'C', long = "hierarchy", default_value = "o", value_parser = parse::parse_nv_auth_entity)]
     pub hierarchy: NvAuthEntity,
 
-    /// Auth value
+    /// Authorization value
     #[arg(short = 'P', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
 
     /// Input data file to extend
     #[arg(short = 'i', long = "input")]
     pub input: PathBuf,
+
+    /// Session context file for authorization
+    #[arg(short = 'S', long = "session")]
+    pub session: Option<PathBuf>,
 }
 
 impl NvExtendCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
-        let nv_index_val =
-            parse::parse_hex_u32(&self.nv_index).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let nv_handle = self.nv_index;
+        let raw_nv_index = u32::from(nv_handle);
+        let tpm_handle: tss_esapi::handles::TpmHandle = nv_handle.into();
+        let nv_idx = ctx
+            .execute_without_session(|ctx| ctx.tr_from_tpm_public(tpm_handle))
+            .with_context(|| format!("failed to load NV index 0x{raw_nv_index:08x}"))?;
 
-        let nv_handle = raw.tr_from_tpm_public(nv_index_val)?;
-
-        let auth_handle = RawEsysContext::resolve_nv_auth_entity(self.hierarchy, nv_handle);
+        let nv_auth = resolve_nv_auth(&mut ctx, self.hierarchy, nv_handle)?;
 
         if let Some(ref auth) = self.auth {
-            raw.set_auth(auth_handle, auth.as_bytes())?;
+            set_nv_auth(&mut ctx, nv_auth, auth.clone())?;
         }
 
         let data = std::fs::read(&self.input)
             .with_context(|| format!("reading input from {}", self.input.display()))?;
+        let nv_data = MaxNvBuffer::try_from(data.clone())
+            .map_err(|e| anyhow::anyhow!("NV extend input: {e}"))?;
 
-        let mut nv_data = TPM2B_MAX_NV_BUFFER::default();
-        let len = data.len().min(nv_data.buffer.len());
-        nv_data.size = len as u16;
-        nv_data.buffer[..len].copy_from_slice(&data[..len]);
-
-        unsafe {
-            let rc = Esys_NV_Extend(
-                raw.ptr(),
-                auth_handle,
-                nv_handle,
-                ESYS_TR_PASSWORD,
-                ESYS_TR_NONE,
-                ESYS_TR_NONE,
-                &nv_data,
-            );
-            if rc != 0 {
-                anyhow::bail!("Esys_NV_Extend failed: 0x{rc:08x}");
-            }
-        }
+        execute_with_optional_session(&mut ctx, self.session.as_deref(), |ctx| {
+            ctx.nv_extend(nv_auth, nv_idx.into(), nv_data)
+        })
+        .context("TPM2_NV_Extend failed")?;
 
         info!(
-            "NV index 0x{nv_index_val:08x} extended with {} bytes",
+            "NV index 0x{:08x} extended with {} bytes",
+            raw_nv_index,
             data.len()
         );
         Ok(())

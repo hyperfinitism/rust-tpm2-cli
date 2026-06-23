@@ -3,56 +3,60 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use log::info;
 use tss_esapi::interface_types::algorithm::HashingAlgorithm;
 use tss_esapi::interface_types::reserved_handles::Hierarchy;
 use tss_esapi::structures::{Digest, MaxBuffer, Public, Signature};
 use tss_esapi::traits::UnMarshall;
-use tss_esapi::tss2_esys::TPMT_TK_VERIFIED;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
 use crate::parse::{self, parse_context_source};
-
-/// Verify a signature using a TPM-loaded key or an external public key file.
-///
-/// The signature file should contain a raw TPM marshaled TPMT_SIGNATURE.
-/// The verification key can be specified as a context source (`-c file:<path>`
-/// or `-c hex:<handle>`), or an external public key file (`-k`) in
-/// marshaled TPM2B_PUBLIC format.
 #[derive(Parser)]
+#[command(
+    group(
+        ArgGroup::new("key_source")
+            .required(true)
+            .multiple(false)
+            .args(["context", "key_file"])
+    ),
+    group(
+        ArgGroup::new("signed_input")
+            .required(true)
+            .multiple(false)
+            .args(["message", "digest"])
+    )
+)]
 pub struct VerifySignatureCmd {
     /// Key context (file:<path> or hex:<handle>)
-    #[arg(short = 'c', long = "context", value_parser = parse_context_source, conflicts_with = "key_file")]
+    #[arg(short = 'c', long = "context", value_parser = parse_context_source)]
     pub context: Option<ContextSource>,
 
     /// External public key file (marshaled TPM2B_PUBLIC binary)
-    #[arg(short = 'k', long = "key-file", conflicts_with = "context")]
+    #[arg(short = 'k', long = "key-file")]
     pub key_file: Option<PathBuf>,
 
     /// Hierarchy for the ticket (owner, endorsement, platform, null)
     #[arg(short = 'C', long = "hierarchy", default_value = "owner", value_parser = parse::parse_hierarchy)]
     pub hierarchy: Hierarchy,
 
-    /// Hash algorithm (sha1, sha256, sha384, sha512)
+    /// Hash algorithm
     #[arg(
         short = 'g',
         long = "hash-algorithm",
         default_value = "sha256",
-        requires = "message",
-        conflicts_with = "digest",
         value_parser = parse::parse_hashing_algorithm
     )]
-    pub hash_algorithm: Option<HashingAlgorithm>,
+    pub hash_algorithm: HashingAlgorithm,
 
     /// File containing the message that was signed
-    #[arg(short = 'm', long = "message", conflicts_with = "digest")]
+    #[arg(short = 'm', long = "message")]
     pub message: Option<PathBuf>,
 
     /// File containing the digest that was signed
-    #[arg(short = 'd', long = "digest", conflicts_with_all = ["message", "hash_algorithm"])]
+    #[arg(short = 'd', long = "digest")]
     pub digest: Option<PathBuf>,
 
     /// File containing the signature to verify (raw TPM marshaled binary)
@@ -66,16 +70,15 @@ pub struct VerifySignatureCmd {
 
 impl VerifySignatureCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
-
-        // Resolve the verification key: context source or external key file.
+        let mut ctx = create_context(global.tcti.as_ref())?;
         let (key_handle, flush_after) = if let Some(ref key_path) = self.key_file {
             let handle = load_external_public_key(&mut ctx, key_path, self.hierarchy)?;
             (handle, true)
         } else {
-            let src = self.context.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("exactly one of --context or --key-file must be provided")
-            })?;
+            let src = self
+                .context
+                .as_ref()
+                .expect("clap requires exactly one key source");
             let handle = load_key_from_source(&mut ctx, src)?;
             (handle, false)
         };
@@ -84,10 +87,13 @@ impl VerifySignatureCmd {
             std::fs::read(digest_path)
                 .with_context(|| format!("reading digest: {}", digest_path.display()))?
         } else {
-            let message_path = self.message.as_ref().unwrap();
+            let message_path = self
+                .message
+                .as_ref()
+                .expect("clap requires exactly one signed input");
             let message_bytes = std::fs::read(message_path)
                 .with_context(|| format!("reading message: {}", message_path.display()))?;
-            let alg = *self.hash_algorithm.as_ref().unwrap();
+            let alg = self.hash_algorithm;
             let buffer = MaxBuffer::try_from(message_bytes)
                 .map_err(|e| anyhow::anyhow!("input too large: {e}"))?;
             let (digest, _ticket) = ctx
@@ -113,20 +119,10 @@ impl VerifySignatureCmd {
         info!("signature is valid");
 
         if let Some(ref path) = self.ticket {
-            let tss_ticket: TPMT_TK_VERIFIED = _ticket
-                .try_into()
-                .map_err(|e| anyhow::anyhow!("failed to convert ticket: {e}"))?;
-            let bytes = unsafe {
-                std::slice::from_raw_parts(
-                    &tss_ticket as *const TPMT_TK_VERIFIED as *const u8,
-                    std::mem::size_of::<TPMT_TK_VERIFIED>(),
-                )
-            };
+            let bytes = crate::ticket::marshall_ticket(&_ticket);
             std::fs::write(path, bytes)?;
             info!("ticket saved to {}", path.display());
         }
-
-        // Flush the transient handle if we loaded an external key.
         if flush_after {
             ctx.flush_context(key_handle.into())
                 .context("failed to flush external key handle")?;

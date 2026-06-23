@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use clap::Parser;
 use serde_json::{Value, json};
 
@@ -9,8 +9,7 @@ use tss_esapi::structures::CapabilityData;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
-
-// Well-known property/handle range start values from the TPM2 spec.
+use crate::parse::{self, CapabilityQuery};
 const PT_FIXED_START: u32 = 0x100; // TPM2_PT_FIXED
 const PT_VAR_START: u32 = 0x200; // TPM2_PT_VAR
 const CC_FIRST: u32 = 0x011F; // TPM2_CC_FIRST
@@ -38,17 +37,19 @@ const ALL_CAPS: &[&str] = &[
     "handles-loaded-session",
     "handles-saved-session",
 ];
-
-/// Query the TPM for its capabilities and properties.
 #[derive(Parser)]
 pub struct GetCapCmd {
     /// Capability to query (e.g. algorithms, properties-fixed, handles-persistent)
-    #[arg(required_unless_present = "list")]
-    pub capability: Option<String>,
+    #[arg(required_unless_present = "list", value_parser = parse::parse_capability_query)]
+    pub capability: Option<CapabilityQuery>,
 
     /// List all supported capability names
     #[arg(short = 'l', long = "list")]
     pub list: bool,
+
+    /// Maximum number of capability entries requested per TPM call
+    #[arg(short = 'n', long = "count", default_value = "254", value_parser = clap::value_parser!(u32).range(1..))]
+    pub count: u32,
 }
 
 impl GetCapCmd {
@@ -60,24 +61,35 @@ impl GetCapCmd {
             return Ok(());
         }
 
-        let cap = self.capability.as_deref().unwrap();
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let cap = self
+            .capability
+            .expect("clap requires a capability unless --list is present");
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let value = match cap {
-            "algorithms" => query_algorithms(&mut ctx)?,
-            "commands" => query_commands(&mut ctx)?,
-            "pcrs" => query_pcrs(&mut ctx)?,
-            "properties-fixed" => query_properties(&mut ctx, PT_FIXED_START)?,
-            "properties-variable" => query_properties(&mut ctx, PT_VAR_START)?,
-            "ecc-curves" => query_ecc_curves(&mut ctx)?,
-            "handles-transient" => query_handles(&mut ctx, HR_TRANSIENT)?,
-            "handles-persistent" => query_handles(&mut ctx, HR_PERSISTENT)?,
-            "handles-permanent" => query_handles(&mut ctx, HR_PERMANENT)?,
-            "handles-pcr" => query_handles(&mut ctx, HR_PCR)?,
-            "handles-nv-index" => query_handles(&mut ctx, HR_NV_INDEX)?,
-            "handles-loaded-session" => query_handles(&mut ctx, HR_LOADED_SESSION)?,
-            "handles-saved-session" => query_handles(&mut ctx, HR_SAVED_SESSION)?,
-            _ => bail!("unknown capability '{cap}'; use -l to list supported capabilities"),
+            CapabilityQuery::Algorithms => query_algorithms(&mut ctx, self.count)?,
+            CapabilityQuery::Commands => query_commands(&mut ctx, self.count)?,
+            CapabilityQuery::Pcrs => query_pcrs(&mut ctx, self.count)?,
+            CapabilityQuery::PropertiesFixed => {
+                query_properties(&mut ctx, PT_FIXED_START, self.count)?
+            }
+            CapabilityQuery::PropertiesVariable => {
+                query_properties(&mut ctx, PT_VAR_START, self.count)?
+            }
+            CapabilityQuery::EccCurves => query_ecc_curves(&mut ctx, self.count)?,
+            CapabilityQuery::HandlesTransient => query_handles(&mut ctx, HR_TRANSIENT, self.count)?,
+            CapabilityQuery::HandlesPersistent => {
+                query_handles(&mut ctx, HR_PERSISTENT, self.count)?
+            }
+            CapabilityQuery::HandlesPermanent => query_handles(&mut ctx, HR_PERMANENT, self.count)?,
+            CapabilityQuery::HandlesPcr => query_handles(&mut ctx, HR_PCR, self.count)?,
+            CapabilityQuery::HandlesNvIndex => query_handles(&mut ctx, HR_NV_INDEX, self.count)?,
+            CapabilityQuery::HandlesLoadedSession => {
+                query_handles(&mut ctx, HR_LOADED_SESSION, self.count)?
+            }
+            CapabilityQuery::HandlesSavedSession => {
+                query_handles(&mut ctx, HR_SAVED_SESSION, self.count)?
+            }
         };
 
         println!("{}", serde_json::to_string_pretty(&value)?);
@@ -90,13 +102,13 @@ fn fetch_all(
     ctx: &mut tss_esapi::Context,
     cap_type: CapabilityType,
     start: u32,
+    count: u32,
 ) -> anyhow::Result<Vec<CapabilityData>> {
-    const BATCH: u32 = 0xFE; // 254 per call — stays well within TPM limits
     let mut results = Vec::new();
     let mut property = start;
     loop {
         let (data, more) = ctx
-            .execute_without_session(|ctx| ctx.get_capability(cap_type, property, BATCH))
+            .execute_without_session(|ctx| ctx.get_capability(cap_type, property, count))
             .context("TPM2_GetCapability failed")?;
         let last = last_property_u32(&data);
         results.push(data);
@@ -124,8 +136,8 @@ fn last_property_u32(data: &CapabilityData) -> Option<u32> {
     }
 }
 
-fn query_algorithms(ctx: &mut tss_esapi::Context) -> anyhow::Result<Value> {
-    let chunks = fetch_all(ctx, CapabilityType::Algorithms, ALG_FIRST)?;
+fn query_algorithms(ctx: &mut tss_esapi::Context, count: u32) -> anyhow::Result<Value> {
+    let chunks = fetch_all(ctx, CapabilityType::Algorithms, ALG_FIRST, count)?;
     let mut arr = Vec::new();
     for chunk in chunks {
         if let CapabilityData::Algorithms(list) = chunk {
@@ -147,8 +159,8 @@ fn query_algorithms(ctx: &mut tss_esapi::Context) -> anyhow::Result<Value> {
     Ok(Value::Array(arr))
 }
 
-fn query_commands(ctx: &mut tss_esapi::Context) -> anyhow::Result<Value> {
-    let chunks = fetch_all(ctx, CapabilityType::Command, CC_FIRST)?;
+fn query_commands(ctx: &mut tss_esapi::Context, count: u32) -> anyhow::Result<Value> {
+    let chunks = fetch_all(ctx, CapabilityType::Command, CC_FIRST, count)?;
     let mut arr = Vec::new();
     for chunk in chunks {
         if let CapabilityData::Commands(list) = chunk {
@@ -168,8 +180,8 @@ fn query_commands(ctx: &mut tss_esapi::Context) -> anyhow::Result<Value> {
     Ok(Value::Array(arr))
 }
 
-fn query_pcrs(ctx: &mut tss_esapi::Context) -> anyhow::Result<Value> {
-    let chunks = fetch_all(ctx, CapabilityType::AssignedPcr, 0)?;
+fn query_pcrs(ctx: &mut tss_esapi::Context, count: u32) -> anyhow::Result<Value> {
+    let chunks = fetch_all(ctx, CapabilityType::AssignedPcr, 0, count)?;
     let mut map = serde_json::Map::new();
     for chunk in chunks {
         if let CapabilityData::AssignedPcr(psl) = chunk {
@@ -178,10 +190,7 @@ fn query_pcrs(ctx: &mut tss_esapi::Context) -> anyhow::Result<Value> {
                 let indices: Vec<Value> = sel
                     .selected()
                     .iter()
-                    .map(|s| {
-                        // PcrSlot values are powers of 2 (bitmask); trailing_zeros gives the index.
-                        Value::Number((u32::from(*s).trailing_zeros() as u64).into())
-                    })
+                    .map(|s| Value::Number((u32::from(*s).trailing_zeros() as u64).into()))
                     .collect();
                 map.insert(alg, Value::Array(indices));
             }
@@ -190,8 +199,8 @@ fn query_pcrs(ctx: &mut tss_esapi::Context) -> anyhow::Result<Value> {
     Ok(Value::Object(map))
 }
 
-fn query_properties(ctx: &mut tss_esapi::Context, start: u32) -> anyhow::Result<Value> {
-    let chunks = fetch_all(ctx, CapabilityType::TpmProperties, start)?;
+fn query_properties(ctx: &mut tss_esapi::Context, start: u32, count: u32) -> anyhow::Result<Value> {
+    let chunks = fetch_all(ctx, CapabilityType::TpmProperties, start, count)?;
     let mut arr = Vec::new();
     for chunk in chunks {
         if let CapabilityData::TpmProperties(list) = chunk {
@@ -206,8 +215,8 @@ fn query_properties(ctx: &mut tss_esapi::Context, start: u32) -> anyhow::Result<
     Ok(Value::Array(arr))
 }
 
-fn query_ecc_curves(ctx: &mut tss_esapi::Context) -> anyhow::Result<Value> {
-    let chunks = fetch_all(ctx, CapabilityType::EccCurves, 0)?;
+fn query_ecc_curves(ctx: &mut tss_esapi::Context, count: u32) -> anyhow::Result<Value> {
+    let chunks = fetch_all(ctx, CapabilityType::EccCurves, 0, count)?;
     let mut arr = Vec::new();
     for chunk in chunks {
         if let CapabilityData::EccCurves(list) = chunk {
@@ -219,8 +228,8 @@ fn query_ecc_curves(ctx: &mut tss_esapi::Context) -> anyhow::Result<Value> {
     Ok(Value::Array(arr))
 }
 
-fn query_handles(ctx: &mut tss_esapi::Context, start: u32) -> anyhow::Result<Value> {
-    let chunks = fetch_all(ctx, CapabilityType::Handles, start)?;
+fn query_handles(ctx: &mut tss_esapi::Context, start: u32, count: u32) -> anyhow::Result<Value> {
+    let chunks = fetch_all(ctx, CapabilityType::Handles, start, count)?;
     let mut arr = Vec::new();
     for chunk in chunks {
         if let CapabilityData::Handles(list) = chunk {

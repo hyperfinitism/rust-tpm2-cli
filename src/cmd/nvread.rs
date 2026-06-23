@@ -11,19 +11,17 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::resolve_nv_auth;
 use crate::output;
-use crate::parse::parse_hex_u32;
+use crate::parse::{self, NvAuthEntity, parse_nv_index};
 use crate::session::execute_with_optional_session;
-
-/// Read data from an NV index.
 #[derive(Parser)]
 pub struct NvReadCmd {
     /// NV index handle (hex, e.g. 0x01400001)
-    #[arg(value_parser = parse_hex_u32)]
-    pub nv_index: u32,
+    #[arg(value_parser = parse_nv_index)]
+    pub nv_index: NvIndexTpmHandle,
 
-    /// Authorization hierarchy (o/owner, p/platform, or the NV index itself)
-    #[arg(short = 'C', long = "hierarchy", default_value = "o")]
-    pub hierarchy: String,
+    /// Authorization entity for the NV index (owner, platform, or nv-index)
+    #[arg(short = 'C', long = "hierarchy", default_value = "o", value_parser = parse::parse_nv_auth_entity)]
+    pub hierarchy: NvAuthEntity,
 
     /// Number of bytes to read
     #[arg(short = 's', long = "size")]
@@ -44,12 +42,9 @@ pub struct NvReadCmd {
 
 impl NvReadCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
-        let nv_handle = NvIndexTpmHandle::new(self.nv_index)
-            .map_err(|e| anyhow::anyhow!("invalid NV index handle: {e}"))?;
-
-        // Determine size from NV public if not specified
+        let nv_handle = self.nv_index;
         let size = match self.size {
             Some(s) => s,
             None => {
@@ -64,7 +59,7 @@ impl NvReadCmd {
             }
         };
 
-        let nv_auth = resolve_nv_auth(&mut ctx, &self.hierarchy, nv_handle)?;
+        let nv_auth = resolve_nv_auth(&mut ctx, self.hierarchy, nv_handle)?;
 
         let tpm_handle: tss_esapi::handles::TpmHandle = nv_handle.into();
         let nv_idx = ctx

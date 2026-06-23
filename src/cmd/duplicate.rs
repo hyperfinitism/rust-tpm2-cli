@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use log::info;
 use tss_esapi::structures::{Auth, Data, SymmetricDefinitionObject};
 
@@ -12,31 +12,33 @@ use crate::context::create_context;
 use crate::handle::{ContextSource, load_object_from_source};
 use crate::parse::{self, parse_context_source};
 use crate::session::execute_with_optional_session;
-
-/// Duplicate a loaded object for use in a different hierarchy.
-///
-/// Wraps TPM2_Duplicate.
 #[derive(Parser)]
+#[command(group(
+    ArgGroup::new("parent")
+        .required(true)
+        .multiple(false)
+        .args(["parent_context", "parent_context_null"])
+))]
 pub struct DuplicateCmd {
     /// Object to duplicate (file:<path> or hex:<handle>)
     #[arg(short = 'c', long = "object-context", value_parser = parse_context_source)]
     pub object_context: ContextSource,
 
     /// New parent key context (file:<path> or hex:<handle>)
-    #[arg(short = 'C', long = "parent-context", value_parser = parse_context_source, conflicts_with = "parent_context_null")]
+    #[arg(short = 'C', long = "parent-context", value_parser = parse_context_source)]
     pub parent_context: Option<ContextSource>,
 
     /// Use a null parent handle
-    #[arg(long = "parent-context-null", conflicts_with = "parent_context")]
+    #[arg(long = "parent-context-null")]
     pub parent_context_null: bool,
 
-    /// Auth value for the object
+    /// Authorization value for the object
     #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
 
     /// Symmetric algorithm for inner wrapper (aes128cfb, null)
-    #[arg(short = 'G', long = "wrapper-algorithm", default_value = "null")]
-    pub wrapper_algorithm: String,
+    #[arg(short = 'G', long = "wrapper-algorithm", default_value = "null", value_parser = parse::parse_wrapper_algorithm)]
+    pub wrapper_algorithm: SymmetricDefinitionObject,
 
     /// Input encryption key file (optional)
     #[arg(short = 'i', long = "encryptionkey-in")]
@@ -54,23 +56,25 @@ pub struct DuplicateCmd {
     #[arg(short = 's', long = "encrypted-seed")]
     pub encrypted_seed: PathBuf,
 
-    /// Session context file
+    /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
     pub session: Option<PathBuf>,
 }
 
 impl DuplicateCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let object_handle = load_object_from_source(&mut ctx, &self.object_context)?;
         let parent_handle = if self.parent_context_null {
             tss_esapi::handles::ObjectHandle::Null
         } else {
-            match &self.parent_context {
-                Some(src) => load_object_from_source(&mut ctx, src)?,
-                None => anyhow::bail!("--parent-context or --parent-context-null is required"),
-            }
+            load_object_from_source(
+                &mut ctx,
+                self.parent_context
+                    .as_ref()
+                    .expect("clap requires exactly one parent"),
+            )?
         };
 
         if let Some(ref auth) = self.auth {
@@ -90,8 +94,6 @@ impl DuplicateCmd {
             None => None,
         };
 
-        let sym_alg = parse_wrapper_algorithm(&self.wrapper_algorithm)?;
-
         let session_path = self.session.as_deref();
         let (enc_key, duplicate_private, encrypted_secret) =
             execute_with_optional_session(&mut ctx, session_path, |ctx| {
@@ -99,7 +101,7 @@ impl DuplicateCmd {
                     object_handle,
                     parent_handle,
                     encryption_key.clone(),
-                    sym_alg,
+                    self.wrapper_algorithm,
                 )
             })
             .context("TPM2_Duplicate failed")?;
@@ -119,20 +121,5 @@ impl DuplicateCmd {
         }
 
         Ok(())
-    }
-}
-
-fn parse_wrapper_algorithm(s: &str) -> anyhow::Result<SymmetricDefinitionObject> {
-    match s.to_lowercase().as_str() {
-        "null" => Ok(SymmetricDefinitionObject::Null),
-        "aes128cfb" | "aes" => Ok(SymmetricDefinitionObject::Aes {
-            key_bits: tss_esapi::interface_types::key_bits::AesKeyBits::Aes128,
-            mode: tss_esapi::interface_types::algorithm::SymmetricMode::Cfb,
-        }),
-        "aes256cfb" => Ok(SymmetricDefinitionObject::Aes {
-            key_bits: tss_esapi::interface_types::key_bits::AesKeyBits::Aes256,
-            mode: tss_esapi::interface_types::algorithm::SymmetricMode::Cfb,
-        }),
-        _ => anyhow::bail!("unsupported wrapper algorithm: {s}"),
     }
 }

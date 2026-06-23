@@ -5,77 +5,55 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::tss2_esys::*;
-
-use tss_esapi::structures::Auth;
+use tss_esapi::handles::PcrHandle;
+use tss_esapi::structures::{Auth, Event};
 
 use crate::cli::GlobalOpts;
+use crate::context::create_context;
 use crate::parse;
-use crate::raw_esys::RawEsysContext;
-
-/// Extend a PCR with event data (TPM hashes the data).
-///
-/// Wraps TPM2_PCR_Event (raw FFI). Unlike pcrextend, the TPM hashes
-/// the data rather than the caller.
+use crate::session::execute_with_optional_session;
 #[derive(Parser)]
 pub struct PcrEventCmd {
-    /// PCR index to extend
-    #[arg()]
-    pub pcr_index: u8,
+    /// PCR index
+    #[arg(value_parser = parse::parse_pcr_handle)]
+    pub pcr: PcrHandle,
 
-    /// Auth value for the PCR (if needed)
+    /// Authorization value for the PCR (if needed)
     #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
 
     /// Input data file to hash and extend
     #[arg(short = 'i', long = "input")]
     pub input: PathBuf,
+
+    /// Session context file for authorization
+    #[arg(short = 'S', long = "session")]
+    pub session: Option<PathBuf>,
 }
 
 impl PcrEventCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
-
-        let pcr_tpm_handle: u32 = self.pcr_index as u32;
-        let pcr_handle: ESYS_TR = if pcr_tpm_handle < TPM2_MAX_PCRS {
-            pcr_tpm_handle
-        } else {
-            raw.tr_from_tpm_public(pcr_tpm_handle)?
-        };
-
+        let mut ctx = create_context(global.tcti.as_ref())?;
         if let Some(ref auth) = self.auth {
-            raw.set_auth(pcr_handle, auth.as_bytes())?;
+            ctx.tr_set_auth(self.pcr.into(), auth.clone())
+                .context("failed to set PCR authorization")?;
         }
 
         let data = std::fs::read(&self.input)
             .with_context(|| format!("reading input from {}", self.input.display()))?;
 
-        let mut event_data = TPM2B_EVENT::default();
-        let len = data.len().min(event_data.buffer.len());
-        event_data.size = len as u16;
-        event_data.buffer[..len].copy_from_slice(&data[..len]);
+        let event_data = Event::try_from(data)
+            .map_err(|e| anyhow::anyhow!("PCR event input is too large: {e}"))?;
+        let digests = execute_with_optional_session(&mut ctx, self.session.as_deref(), |ctx| {
+            ctx.pcr_event(self.pcr, event_data.clone())
+        })
+        .context("TPM2_PCR_Event failed")?;
 
-        unsafe {
-            let mut digests: *mut TPML_DIGEST_VALUES = std::ptr::null_mut();
-            let rc = Esys_PCR_Event(
-                raw.ptr(),
-                pcr_handle,
-                ESYS_TR_PASSWORD,
-                ESYS_TR_NONE,
-                ESYS_TR_NONE,
-                &event_data,
-                &mut digests,
-            );
-            if rc != 0 {
-                anyhow::bail!("Esys_PCR_Event failed: 0x{rc:08x}");
-            }
-
-            if !digests.is_null() {
-                let d = &*digests;
-                info!("PCR {} extended with {} digest(s)", self.pcr_index, d.count);
-                Esys_Free(digests as *mut _);
-            }
-        }
+        info!(
+            "PCR {:?} extended with {} digest(s)",
+            self.pcr,
+            digests.value().len()
+        );
 
         Ok(())
     }

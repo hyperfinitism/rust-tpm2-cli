@@ -12,8 +12,6 @@ use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
 use crate::output;
 use crate::parse::parse_context_source;
-
-/// Read the public area of a loaded object.
 #[derive(Parser)]
 pub struct ReadPublicCmd {
     /// Object context (file:<path> or hex:<handle>)
@@ -27,7 +25,7 @@ pub struct ReadPublicCmd {
 
 impl ReadPublicCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let key_handle = load_key_from_source(&mut ctx, &self.context)?;
 

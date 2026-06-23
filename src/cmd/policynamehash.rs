@@ -12,10 +12,6 @@ use tss_esapi::structures::Digest;
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::session::load_session_from_file;
-
-/// Bind a policy to specific object names.
-///
-/// Wraps TPM2_PolicyNameHash.
 #[derive(Parser)]
 pub struct PolicyNameHashCmd {
     /// Policy session file
@@ -33,7 +29,7 @@ pub struct PolicyNameHashCmd {
 
 impl PolicyNameHashCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let session = load_session_from_file(&mut ctx, &self.session, SessionType::Policy)?;
         let policy_session = session

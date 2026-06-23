@@ -5,9 +5,8 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::constants::SessionType;
+use tss_esapi::handles::ObjectHandle;
 use tss_esapi::interface_types::algorithm::HashingAlgorithm;
-use tss_esapi::interface_types::session_handles::AuthSession;
 use tss_esapi::structures::{Auth, Data};
 use tss_esapi::traits::Marshall;
 
@@ -15,29 +14,28 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
 use crate::parse::{self, parse_context_source};
-use crate::session::load_session_from_file;
-
-/// Get a signed timestamp from the TPM.
-///
-/// Wraps TPM2_GetTime: produces an attestation structure containing
-/// the current time and clock values, signed by the specified key.
+use crate::session::load_optional_auth_session;
 #[derive(Parser)]
 pub struct GetTimeCmd {
     /// Signing key context (file:<path> or hex:<handle>)
     #[arg(short = 'c', long = "context", value_parser = parse_context_source)]
     pub context: ContextSource,
 
-    /// Auth value for the signing key
+    /// Authorization value for the signing key
     #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
+
+    /// Authorization value for the endorsement hierarchy
+    #[arg(long = "privacy-auth", value_parser = parse::parse_auth)]
+    pub privacy_auth: Option<Auth>,
 
     /// Hash algorithm for signing
     #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
     pub hash_algorithm: HashingAlgorithm,
 
     /// Signature scheme (rsassa, rsapss, ecdsa, null)
-    #[arg(long = "scheme", default_value = "null")]
-    pub scheme: String,
+    #[arg(long = "scheme", default_value = "null", value_parser = parse::parse_signature_scheme_kind)]
+    pub scheme: parse::SignatureSchemeKind,
 
     /// Qualifying data (hex:<hex_bytes> or file:<path>)
     #[arg(short = 'q', long = "qualification", value_parser = parse::parse_qualification)]
@@ -51,22 +49,29 @@ pub struct GetTimeCmd {
     #[arg(short = 's', long = "signature")]
     pub signature: Option<PathBuf>,
 
-    /// Session context file
+    /// Session context file for privacy administrator authorization
     #[arg(short = 'S', long = "session")]
     pub session: Option<PathBuf>,
+
+    /// Session context file for signing key authorization
+    #[arg(long = "signing-session")]
+    pub signing_session: Option<PathBuf>,
 }
 
 impl GetTimeCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let signing_key = load_key_from_source(&mut ctx, &self.context)?;
-        let scheme = parse::parse_signature_scheme(&self.scheme, self.hash_algorithm)
-            .map_err(anyhow::Error::msg)?;
+        let scheme = self.scheme.with_hash(self.hash_algorithm);
 
         if let Some(ref auth) = self.auth {
             ctx.tr_set_auth(signing_key.into(), auth.clone())
                 .context("tr_set_auth failed")?;
+        }
+        if let Some(auth) = &self.privacy_auth {
+            ctx.tr_set_auth(ObjectHandle::Endorsement, auth.clone())
+                .context("failed to set endorsement hierarchy authorization")?;
         }
 
         let qualifying_data = match &self.qualification {
@@ -74,16 +79,10 @@ impl GetTimeCmd {
                 .map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?,
             None => Data::default(),
         };
-
-        // TPM2_GetTime requires two auth sessions: one for the privacy admin
-        // (authSession1) and one for the signing key (authSession2).
-        // If -S is provided, use it for the privacy admin; otherwise fall
-        // back to password auth.  The signing key always uses password.
-        let session1 = match &self.session {
-            Some(path) => load_session_from_file(&mut ctx, path, SessionType::Hmac)?,
-            None => AuthSession::Password,
-        };
-        ctx.set_sessions((Some(session1), Some(AuthSession::Password), None));
+        let privacy_session = load_optional_auth_session(&mut ctx, self.session.as_deref())?;
+        let signing_session =
+            load_optional_auth_session(&mut ctx, self.signing_session.as_deref())?;
+        ctx.set_sessions((Some(privacy_session), Some(signing_session), None));
         let result = ctx
             .get_time(signing_key, qualifying_data.clone(), scheme)
             .map_err(|e| anyhow::anyhow!(e));

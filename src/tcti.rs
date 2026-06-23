@@ -12,46 +12,50 @@ pub(crate) const DEFAULT_TCTI: &str = "device:/dev/tpm0";
 /// Default raw device path (used by `send`).
 pub(crate) const DEFAULT_DEVICE_PATH: &str = "/dev/tpm0";
 
-/// Resolve the TCTI configuration string.
-///
-/// Resolution order:
-/// 1. Explicit `tcti` argument
-/// 2. `RUST_TPM2_CLI_TCTI` environment variable
-/// 3. `device:/dev/tpm0` (default)
-///
-/// tss-esapi 8.x supports:
-/// - `device:/dev/tpmrm0`
-/// - `mssim:host=localhost,port=2321`
-/// - `swtpm:host=localhost,port=2321`  (TCP)
-/// - `swtpm:path=/tmp/swtpm-sock`      (Unix socket)
-/// - `libtpms:`
-/// - `tabrmd:`
-pub(crate) fn resolve_tcti_str(tcti: Option<&str>) -> String {
-    if let Some(s) = tcti {
-        return s.to_owned();
-    }
-    if let Ok(val) = std::env::var("RUST_TPM2_CLI_TCTI")
-        && !val.is_empty()
-    {
-        return val;
-    }
-    DEFAULT_TCTI.to_owned()
+/// A TCTI configuration parsed at the CLI boundary.
+#[derive(Debug, Clone)]
+pub struct TctiConfig {
+    raw: String,
+    name_conf: TctiNameConf,
 }
 
-/// Parse a TCTI configuration string into a [`TctiNameConf`].
-pub fn parse_tcti(tcti: Option<&str>) -> Result<TctiNameConf, Tpm2Error> {
-    let tcti_str = resolve_tcti_str(tcti);
-    TctiNameConf::from_str(&tcti_str).map_err(|e| Tpm2Error::InvalidTcti(e.to_string()))
+impl TctiConfig {
+    pub fn name_conf(&self) -> TctiNameConf {
+        self.name_conf.clone()
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.raw
+    }
 }
 
-/// Extract the raw device path from a TCTI string.
-///
-/// Used by `send` to open the TPM device directly.
-pub(crate) fn extract_device_path(tcti: Option<&str>) -> String {
-    let tcti_str = resolve_tcti_str(tcti);
-    if let Some(rest) = tcti_str.strip_prefix("device:") {
-        rest.to_owned()
-    } else {
-        DEFAULT_DEVICE_PATH.to_owned()
+impl FromStr for TctiConfig {
+    type Err = Tpm2Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.contains('\0') {
+            return Err(Tpm2Error::InvalidTcti(
+                "TCTI configuration contains an embedded NUL".to_owned(),
+            ));
+        }
+        let name_conf =
+            TctiNameConf::from_str(value).map_err(|e| Tpm2Error::InvalidTcti(e.to_string()))?;
+        Ok(Self {
+            raw: value.to_owned(),
+            name_conf,
+        })
     }
+}
+
+pub(crate) fn default_tcti() -> TctiConfig {
+    DEFAULT_TCTI
+        .parse()
+        .expect("the built-in default TCTI configuration must be valid")
+}
+
+/// Extract the raw device path from a parsed TCTI configuration.
+pub(crate) fn extract_device_path(tcti: Option<&TctiConfig>) -> String {
+    tcti.and_then(|config| config.as_str().strip_prefix("device:"))
+        .unwrap_or(DEFAULT_DEVICE_PATH)
+        .to_owned()
 }

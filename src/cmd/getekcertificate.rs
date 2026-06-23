@@ -2,101 +2,94 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use clap::Parser;
 use log::info;
 use tss_esapi::handles::NvIndexTpmHandle;
-use tss_esapi::interface_types::reserved_handles::NvAuth;
+use tss_esapi::structures::Auth;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
+use crate::handle::{resolve_nv_auth, set_nv_auth};
 use crate::output;
+use crate::parse::{self, AsymmetricAlgorithm, NvAuthEntity};
+use crate::session::{execute_with_command_session, load_command_session};
 
 /// Well-known NV indices for EK certificates (TCG EK Credential Profile).
 const NV_RSA_EK_CERT: u32 = 0x01C00002;
 const NV_ECC_EK_CERT: u32 = 0x01C0000A;
-
-/// Retrieve the Endorsement Key (EK) certificate from TPM NV storage.
-///
-/// The TCG EK Credential Profile reserves well-known NV indices for
-/// storing EK certificates provisioned during manufacturing:
-///   - RSA 2048: 0x01C00002
-///   - ECC P-256: 0x01C0000A
-///
-/// This command reads the certificate from the appropriate NV index
-/// and writes it to the specified output file (DER-encoded X.509).
 #[derive(Parser)]
 pub struct GetEkCertificateCmd {
     /// Key algorithm (rsa, ecc)
-    #[arg(short = 'a', long = "algorithm", default_value = "rsa")]
-    pub algorithm: String,
+    #[arg(short = 'a', long = "algorithm", default_value = "rsa", value_parser = parse::parse_asymmetric_algorithm)]
+    pub algorithm: AsymmetricAlgorithm,
 
     /// Override NV index (hex, e.g. 0x01C00002)
-    #[arg(short = 'x', long = "nv-index")]
-    pub nv_index: Option<String>,
+    #[arg(short = 'x', long = "nv-index", value_parser = parse::parse_nv_index)]
+    pub nv_index: Option<NvIndexTpmHandle>,
+
+    /// Authorization entity for the NV index (owner, platform, or nv-index)
+    #[arg(short = 'C', long = "hierarchy", default_value = "o", value_parser = parse::parse_nv_auth_entity)]
+    pub hierarchy: NvAuthEntity,
+
+    /// Authorization value for the NV index
+    #[arg(short = 'P', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Output file for the EK certificate (DER-encoded X.509)
     #[arg(short = 'o', long = "output")]
     pub output: Option<PathBuf>,
+
+    /// Session context file for authorization
+    #[arg(short = 'S', long = "session")]
+    pub session: Option<PathBuf>,
+
+    /// Maximum bytes requested by each TPM2_NV_Read call
+    #[arg(long = "chunk-size", default_value = "512", value_parser = clap::value_parser!(u16).range(1..))]
+    pub chunk_size: u16,
 }
 
 impl GetEkCertificateCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let nv_index = match &self.nv_index {
-            Some(s) => {
-                let stripped = s
-                    .strip_prefix("0x")
-                    .or_else(|| s.strip_prefix("0X"))
-                    .unwrap_or(s);
-                u32::from_str_radix(stripped, 16)
-                    .map_err(|_| anyhow::anyhow!("invalid NV index: {s}"))?
-            }
-            None => match self.algorithm.to_lowercase().as_str() {
-                "rsa" => NV_RSA_EK_CERT,
-                "ecc" => NV_ECC_EK_CERT,
-                _ => bail!(
-                    "unsupported algorithm '{}'; use 'rsa' or 'ecc'",
-                    self.algorithm
-                ),
-            },
-        };
+        let nv_handle = self.nv_index.unwrap_or_else(|| {
+            NvIndexTpmHandle::new(match self.algorithm {
+                AsymmetricAlgorithm::Rsa => NV_RSA_EK_CERT,
+                AsymmetricAlgorithm::Ecc => NV_ECC_EK_CERT,
+            })
+            .expect("TCG EK certificate indices are valid NV handles")
+        });
+        let nv_index = u32::from(nv_handle);
 
         info!("reading EK certificate from NV index 0x{nv_index:08x}");
 
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
-        let nv_handle = NvIndexTpmHandle::new(nv_index)
-            .map_err(|e| anyhow::anyhow!("invalid NV index 0x{nv_index:08x}: {e}"))?;
-
-        // Resolve the NV index to an ESYS_TR.
         let tpm_handle: tss_esapi::handles::TpmHandle = nv_handle.into();
         let nv_idx = ctx
             .execute_without_session(|ctx| ctx.tr_from_tpm_public(tpm_handle))
             .with_context(|| format!("failed to load NV index 0x{nv_index:08x}"))?;
-
-        // Read the NV public area to determine the certificate size.
+        let nv_auth = resolve_nv_auth(&mut ctx, self.hierarchy, nv_handle)?;
+        if let Some(auth) = &self.auth {
+            set_nv_auth(&mut ctx, nv_auth, auth.clone())?;
+        }
         let (nv_public, _) = ctx
             .execute_without_session(|ctx| ctx.nv_read_public(nv_idx.into()))
             .context("TPM2_NV_ReadPublic failed")?;
 
         let total_size = nv_public.data_size() as u16;
         info!("EK certificate size: {total_size} bytes");
-
-        // Read the certificate data. TPMs often limit NV reads to
-        // MAX_NV_BUFFER_SIZE (~1024 bytes), so read in chunks.
         let mut cert_data = Vec::with_capacity(total_size as usize);
-        let chunk_size: u16 = 512;
         let mut offset: u16 = 0;
+        let session = load_command_session(&mut ctx, self.session.as_deref())?;
 
         while offset < total_size {
             let remaining = total_size - offset;
-            let to_read = remaining.min(chunk_size);
+            let to_read = remaining.min(self.chunk_size);
 
-            let data = ctx
-                .execute_with_nullauth_session(|ctx| {
-                    ctx.nv_read(NvAuth::Owner, nv_idx.into(), to_read, offset)
-                })
-                .with_context(|| format!("TPM2_NV_Read failed at offset {offset}"))?;
+            let data = execute_with_command_session(&mut ctx, session, |ctx| {
+                ctx.nv_read(nv_auth, nv_idx.into(), to_read, offset)
+            })
+            .with_context(|| format!("TPM2_NV_Read failed at offset {offset}"))?;
 
             cert_data.extend_from_slice(data.as_bytes());
             offset += to_read;

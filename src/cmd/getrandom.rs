@@ -10,8 +10,6 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::output;
 use crate::session::execute_with_optional_session;
-
-/// Get random bytes from the TPM.
 #[derive(Parser)]
 pub struct GetRandomCmd {
     /// Number of random bytes to retrieve
@@ -36,7 +34,7 @@ pub struct GetRandomCmd {
 
 impl GetRandomCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let num_bytes = self.num_bytes;
         let session_path = self.session.as_deref();

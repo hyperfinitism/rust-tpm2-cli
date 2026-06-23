@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use clap::Parser;
 use log::info;
 use tss_esapi::constants::SessionType;
@@ -12,10 +12,6 @@ use tss_esapi::structures::{Digest, DigestList};
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::session::load_session_from_file;
-
-/// Compound multiple policies with logical OR.
-///
-/// Wraps TPM2_PolicyOR.
 #[derive(Parser)]
 pub struct PolicyOrCmd {
     /// Policy session file
@@ -33,16 +29,12 @@ pub struct PolicyOrCmd {
 
 impl PolicyOrCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let session = load_session_from_file(&mut ctx, &self.session, SessionType::Policy)?;
         let policy_session = session
             .try_into()
             .map_err(|_| anyhow::anyhow!("expected a policy session"))?;
-
-        if self.policy_list.len() < 2 {
-            bail!("at least 2 policy digests required for OR");
-        }
 
         let mut digest_list = DigestList::new();
         for path in &self.policy_list {

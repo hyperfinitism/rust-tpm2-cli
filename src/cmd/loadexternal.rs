@@ -13,12 +13,6 @@ use tss_esapi::interface_types::reserved_handles::Hierarchy;
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::parse;
-
-/// Load an external key into the TPM.
-///
-/// Wraps TPM2_LoadExternal: loads a key that was not created by the TPM
-/// into a transient handle. This is useful for importing external public
-/// keys for signature verification.
 #[derive(Parser)]
 pub struct LoadExternalCmd {
     /// Input file for the public portion (marshaled TPM2B_PUBLIC)
@@ -44,7 +38,7 @@ pub struct LoadExternalCmd {
 
 impl LoadExternalCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
         let hierarchy = self.hierarchy;
 
         let pub_data = std::fs::read(&self.public)
@@ -60,8 +54,6 @@ impl LoadExternalCmd {
                     .map_err(|e| anyhow::anyhow!("failed to unmarshal sensitive: {e}"))?
             }
             None => {
-                // Load public-only (for verification keys etc).
-                // Use an empty sensitive with matching type.
                 return self.load_public_only(&mut ctx, public, hierarchy);
             }
         };

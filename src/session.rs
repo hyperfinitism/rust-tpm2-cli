@@ -42,6 +42,45 @@ pub fn load_session_from_file(
         .ok_or_else(|| anyhow::anyhow!("loaded session handle is not a valid auth session"))
 }
 
+/// Load an HMAC session when supplied, or select password authorization.
+pub fn load_optional_auth_session(
+    ctx: &mut tss_esapi::Context,
+    path: Option<&Path>,
+) -> anyhow::Result<AuthSession> {
+    match path {
+        Some(path) => load_session_from_file(ctx, path, SessionType::Hmac),
+        None => Ok(AuthSession::Password),
+    }
+}
+
+/// Load an HMAC session for repeated command authorization when supplied.
+pub fn load_command_session(
+    ctx: &mut tss_esapi::Context,
+    path: Option<&Path>,
+) -> anyhow::Result<Option<AuthSession>> {
+    path.map(|path| load_session_from_file(ctx, path, SessionType::Hmac))
+        .transpose()
+}
+
+/// Execute a closure with a previously loaded session or a default null-auth session.
+pub fn execute_with_command_session<F, T>(
+    ctx: &mut tss_esapi::Context,
+    session: Option<AuthSession>,
+    f: F,
+) -> anyhow::Result<T>
+where
+    F: FnOnce(&mut tss_esapi::Context) -> tss_esapi::Result<T>,
+{
+    match session {
+        Some(session) => ctx
+            .execute_with_session(Some(session), f)
+            .map_err(|e| anyhow::anyhow!(e)),
+        None => ctx
+            .execute_with_nullauth_session(f)
+            .map_err(|e| anyhow::anyhow!(e)),
+    }
+}
+
 /// Execute a closure with either a loaded session or a default null-auth session.
 ///
 /// When `session_path` is `Some`, the session context file is loaded and set
@@ -56,18 +95,8 @@ pub fn execute_with_optional_session<F, T>(
 where
     F: FnOnce(&mut tss_esapi::Context) -> tss_esapi::Result<T>,
 {
-    match session_path {
-        Some(path) => {
-            let session = load_session_from_file(ctx, path, SessionType::Hmac)?;
-            ctx.set_sessions((Some(session), None, None));
-            let result = f(ctx).map_err(|e| anyhow::anyhow!(e))?;
-            ctx.clear_sessions();
-            Ok(result)
-        }
-        None => ctx
-            .execute_with_nullauth_session(f)
-            .map_err(|e| anyhow::anyhow!(e)),
-    }
+    let session = load_command_session(ctx, session_path)?;
+    execute_with_command_session(ctx, session, f)
 }
 
 /// Start a policy session and satisfy `PolicySecret(TPM_RH_ENDORSEMENT)`.

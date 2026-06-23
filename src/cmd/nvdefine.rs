@@ -14,17 +14,15 @@ use tss_esapi::interface_types::reserved_handles::Provision;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
-use crate::parse::{self, parse_hex_u32};
+use crate::parse::{self, parse_nv_index};
 use crate::session::execute_with_optional_session;
-
-/// Define a new NV index.
 #[derive(Parser)]
 pub struct NvDefineCmd {
     /// NV index handle (hex, e.g. 0x01400001)
-    #[arg(value_parser = parse_hex_u32)]
-    pub nv_index: u32,
+    #[arg(value_parser = parse_nv_index)]
+    pub nv_index: NvIndexTpmHandle,
 
-    /// Authorization hierarchy (o/owner, p/platform)
+    /// Authorization hierarchy (owner or platform)
     #[arg(short = 'C', long = "hierarchy", default_value = "o", value_parser = parse::parse_provision)]
     pub hierarchy: Provision,
 
@@ -49,6 +47,10 @@ pub struct NvDefineCmd {
     #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
 
+    /// Authorization value for the hierarchy
+    #[arg(short = 'P', long = "hierarchy-auth", value_parser = parse::parse_auth)]
+    pub hierarchy_auth: Option<Auth>,
+
     /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
     pub session: Option<PathBuf>,
@@ -56,10 +58,15 @@ pub struct NvDefineCmd {
 
 impl NvDefineCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
-        let nv_handle = NvIndexTpmHandle::new(self.nv_index)
-            .map_err(|e| anyhow::anyhow!("invalid NV index handle: {e}"))?;
+        let nv_handle = self.nv_index;
+
+        if let Some(auth) = &self.hierarchy_auth {
+            let hierarchy = parse::provision_to_hierarchy_auth(self.hierarchy);
+            ctx.tr_set_auth(hierarchy.into(), auth.clone())
+                .context("failed to set hierarchy authorization")?;
+        }
 
         let nv_public = NvPublicBuilder::new()
             .with_nv_index(nv_handle)
@@ -75,7 +82,7 @@ impl NvDefineCmd {
         })
         .context("TPM2_NV_DefineSpace failed")?;
 
-        info!("NV index 0x{:08x} defined", self.nv_index);
+        info!("NV index 0x{:08x} defined", u32::from(self.nv_index));
         Ok(())
     }
 }

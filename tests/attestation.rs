@@ -817,7 +817,7 @@ fn nvcertify() {
             "-C",
             "o",
             "-s",
-            "16",
+            "2048",
             "-a",
             "ownerwrite|ownerread",
             "0x01000020",

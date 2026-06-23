@@ -6,7 +6,7 @@ use anyhow::Context;
 use clap::Parser;
 use log::info;
 use tss_esapi::interface_types::algorithm::HashingAlgorithm;
-use tss_esapi::structures::{Data, PcrSelectionList};
+use tss_esapi::structures::{Auth, Data, PcrSelectionList};
 use tss_esapi::traits::Marshall;
 
 use crate::cli::GlobalOpts;
@@ -15,13 +15,15 @@ use crate::handle::{ContextSource, load_key_from_source};
 use crate::parse::{self, parse_context_source};
 use crate::pcr;
 use crate::session::execute_with_optional_session;
-
-/// Generate a TPM quote over selected PCRs.
 #[derive(Parser)]
 pub struct QuoteCmd {
     /// Signing key context (file:<path> or hex:<handle>)
     #[arg(short = 'c', long = "context", value_parser = parse_context_source)]
     pub context: ContextSource,
+
+    /// Authorization value for the signing key
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// PCR selection list (e.g. sha256:0,1,2+sha1:all)
     #[arg(short = 'l', long = "pcr-list", value_parser = parse::parse_pcr_selection)]
@@ -32,8 +34,8 @@ pub struct QuoteCmd {
     pub hash_algorithm: HashingAlgorithm,
 
     /// Signature scheme (rsassa, rsapss, ecdsa, null)
-    #[arg(long = "scheme", default_value = "null")]
-    pub scheme: String,
+    #[arg(long = "scheme", default_value = "null", value_parser = parse::parse_signature_scheme_kind)]
+    pub scheme: parse::SignatureSchemeKind,
 
     /// Qualifying data (hex:<hex_bytes> or file:<path>)
     #[arg(short = 'q', long = "qualification", value_parser = parse::parse_qualification)]
@@ -58,11 +60,14 @@ pub struct QuoteCmd {
 
 impl QuoteCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let key_handle = load_key_from_source(&mut ctx, &self.context)?;
-        let scheme = parse::parse_signature_scheme(&self.scheme, self.hash_algorithm)
-            .map_err(anyhow::Error::msg)?;
+        if let Some(auth) = &self.auth {
+            ctx.tr_set_auth(key_handle.into(), auth.clone())
+                .context("failed to set signing key authorization")?;
+        }
+        let scheme = self.scheme.with_hash(self.hash_algorithm);
         let pcr_selection = self.pcr_list.clone();
 
         let qualifying_data = match &self.qualification {

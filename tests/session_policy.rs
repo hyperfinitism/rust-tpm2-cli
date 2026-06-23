@@ -303,6 +303,40 @@ fn startauthsession_hmac() {
 }
 
 #[test]
+fn flushcontext_resolves_saved_session_handle() {
+    let s = SwtpmSession::new();
+    let session_ctx = s.tmp().path().join("flush_session.ctx");
+    s.cmd("startauthsession")
+        .arg("-S")
+        .arg(&session_ctx)
+        .args(["--hmac-session", "-g", "sha256"])
+        .assert()
+        .success();
+
+    let output = s
+        .cmd("getcap")
+        .arg("handles-saved-session")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let handles: Vec<String> = serde_json::from_slice(&output.stdout).unwrap();
+    let handle = handles.first().expect("saved session handle");
+
+    s.cmd("flushcontext")
+        .arg("--handle")
+        .arg(handle)
+        .assert()
+        .success();
+
+    s.cmd("sessionconfig")
+        .arg("-S")
+        .arg(&session_ctx)
+        .arg("--enable-audit")
+        .assert()
+        .failure();
+}
+
+#[test]
 fn policypcr_is_deterministic() {
     let s = SwtpmSession::new();
 

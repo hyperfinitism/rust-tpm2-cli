@@ -3,7 +3,7 @@
 use log::info;
 use std::path::PathBuf;
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use clap::Parser;
 use tss_esapi::attributes::ObjectAttributesBuilder;
 use tss_esapi::interface_types::algorithm::{HashingAlgorithm, PublicAlgorithm};
@@ -14,15 +14,13 @@ use tss_esapi::structures::{
     PcrSelectionList, Public, PublicBuilder, PublicEccParametersBuilder, PublicKeyedHashParameters,
     PublicRsaParametersBuilder, RsaExponent, RsaScheme, SensitiveData,
 };
-use tss_esapi::traits::Marshall;
+use tss_esapi::traits::{Marshall, UnMarshall};
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
 use crate::parse::{self, parse_context_source};
 use crate::session::execute_with_optional_session;
-
-/// Create a child key under a parent key.
 #[derive(Parser)]
 pub struct CreateCmd {
     /// Parent key context (file:<path> or hex:<handle>)
@@ -30,8 +28,8 @@ pub struct CreateCmd {
     pub parent_context: ContextSource,
 
     /// Key algorithm (rsa, ecc, keyedhash, hmac)
-    #[arg(short = 'G', long = "key-algorithm", default_value = "rsa")]
-    pub algorithm: String,
+    #[arg(short = 'G', long = "key-algorithm", default_value = "rsa", value_parser = parse::parse_create_algorithm)]
+    pub algorithm: parse::CreateAlgorithm,
 
     /// Hash algorithm
     #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
@@ -40,6 +38,14 @@ pub struct CreateCmd {
     /// Authorization value for the new key
     #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
+
+    /// Authorization value for the parent key
+    #[arg(short = 'P', long = "parent-auth", value_parser = parse::parse_auth)]
+    pub parent_auth: Option<Auth>,
+
+    /// Input public template (marshaled TPM2B_PUBLIC)
+    #[arg(long = "template")]
+    pub template: Option<PathBuf>,
 
     /// Output file for the private portion
     #[arg(short = 'r', long = "private")]
@@ -50,8 +56,8 @@ pub struct CreateCmd {
     pub public_out: Option<PathBuf>,
 
     /// RSA key size in bits
-    #[arg(long = "key-size", default_value = "2048")]
-    pub key_size: u16,
+    #[arg(long = "key-size", default_value = "2048", value_parser = parse::parse_rsa_key_bits)]
+    pub key_size: RsaKeyBits,
 
     /// ECC curve (nistp256, nistp384, nistp521, sm2p256, etc.)
     #[arg(long = "ecc-curve", default_value = "nistp256", value_parser = parse::parse_ecc_curve)]
@@ -76,17 +82,26 @@ pub struct CreateCmd {
 
 impl CreateCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let parent_handle = load_key_from_source(&mut ctx, &self.parent_context)?;
-        let public = build_child_public(
-            &self.algorithm,
-            self.hash_algorithm,
-            self.key_size,
-            self.ecc_curve,
-        )?;
-
-        // If seal data is provided, read it.
+        if let Some(auth) = &self.parent_auth {
+            ctx.tr_set_auth(parent_handle.into(), auth.clone())
+                .context("failed to set parent key authorization")?;
+        }
+        let public = match &self.template {
+            Some(path) => {
+                let bytes = std::fs::read(path)
+                    .with_context(|| format!("reading public template from {}", path.display()))?;
+                Public::unmarshall(&bytes).context("invalid TPM2B_PUBLIC template")?
+            }
+            None => build_child_public(
+                self.algorithm,
+                self.hash_algorithm,
+                self.key_size,
+                self.ecc_curve,
+            )?,
+        };
         let sensitive_data = match &self.seal_data {
             Some(path) => {
                 let data = std::fs::read(path)
@@ -134,23 +149,22 @@ impl CreateCmd {
 }
 
 fn build_child_public(
-    alg: &str,
+    alg: parse::CreateAlgorithm,
     hash_alg: tss_esapi::interface_types::algorithm::HashingAlgorithm,
-    key_size: u16,
+    key_size: RsaKeyBits,
     ecc_curve: EccCurve,
 ) -> anyhow::Result<Public> {
-    match alg.to_lowercase().as_str() {
-        "rsa" => build_rsa_signing_public(hash_alg, key_size),
-        "ecc" => build_ecc_signing_public(hash_alg, ecc_curve),
-        "hmac" => build_hmac_public(hash_alg),
-        "keyedhash" => build_sealed_public(hash_alg),
-        _ => bail!("unsupported key algorithm: {alg} (supported: rsa, ecc, hmac, keyedhash)"),
+    match alg {
+        parse::CreateAlgorithm::Rsa => build_rsa_signing_public(hash_alg, key_size),
+        parse::CreateAlgorithm::Ecc => build_ecc_signing_public(hash_alg, ecc_curve),
+        parse::CreateAlgorithm::Hmac => build_hmac_public(hash_alg),
+        parse::CreateAlgorithm::KeyedHash => build_sealed_public(hash_alg),
     }
 }
 
 fn build_rsa_signing_public(
     hash_alg: tss_esapi::interface_types::algorithm::HashingAlgorithm,
-    key_size: u16,
+    key_size: RsaKeyBits,
 ) -> anyhow::Result<Public> {
     let attributes = ObjectAttributesBuilder::new()
         .with_fixed_tpm(true)
@@ -161,16 +175,9 @@ fn build_rsa_signing_public(
         .build()
         .context("failed to build object attributes")?;
 
-    let bits = match key_size {
-        1024 => RsaKeyBits::Rsa1024,
-        2048 => RsaKeyBits::Rsa2048,
-        3072 => RsaKeyBits::Rsa3072,
-        4096 => RsaKeyBits::Rsa4096,
-        _ => bail!("unsupported RSA key size: {key_size}"),
-    };
     let params = PublicRsaParametersBuilder::new()
         .with_scheme(RsaScheme::RsaSsa(HashScheme::new(hash_alg)))
-        .with_key_bits(bits)
+        .with_key_bits(key_size)
         .with_exponent(RsaExponent::default())
         .with_is_signing_key(true)
         .build()
@@ -246,8 +253,6 @@ fn build_hmac_public(
 fn build_sealed_public(
     hash_alg: tss_esapi::interface_types::algorithm::HashingAlgorithm,
 ) -> anyhow::Result<Public> {
-    // Sealed data objects use KeyedHash with a Null scheme and no
-    // sign_encrypt or sensitive_data_origin attributes.
     let attributes = ObjectAttributesBuilder::new()
         .with_fixed_tpm(true)
         .with_fixed_parent(true)

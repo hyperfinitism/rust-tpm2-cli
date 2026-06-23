@@ -8,12 +8,6 @@ use clap::Parser;
 use serde_json::{Value, json};
 
 use crate::cli::GlobalOpts;
-
-/// Parse and display a binary TPM2 event log.
-///
-/// Reads a TCG PC Client Platform Firmware Profile event log
-/// (binary_bios_measurements) and prints the entries as JSON.
-/// Default path: /sys/kernel/security/tpm0/binary_bios_measurements
 #[derive(Parser)]
 pub struct EventLogCmd {
     /// Path to the binary event log file
@@ -31,10 +25,6 @@ impl EventLogCmd {
         Ok(())
     }
 }
-
-// -----------------------------------------------------------------------
-// Event type names
-// -----------------------------------------------------------------------
 
 fn event_type_name(ty: u32) -> &'static str {
     match ty {
@@ -105,10 +95,6 @@ fn hash_alg_digest_size(alg: u16) -> Option<usize> {
     }
 }
 
-// -----------------------------------------------------------------------
-// Binary reader helpers
-// -----------------------------------------------------------------------
-
 fn read_u16(cur: &mut Cursor<&[u8]>) -> anyhow::Result<u16> {
     let mut buf = [0u8; 2];
     cur.read_exact(&mut buf)
@@ -130,10 +116,6 @@ fn read_bytes(cur: &mut Cursor<&[u8]>, n: usize) -> anyhow::Result<Vec<u8>> {
     Ok(buf)
 }
 
-// -----------------------------------------------------------------------
-// Spec ID event parsing (determines crypto-agile vs legacy format)
-// -----------------------------------------------------------------------
-
 struct DigestSpec {
     alg_id: u16,
     digest_size: u16,
@@ -142,16 +124,11 @@ struct DigestSpec {
 /// Parse the TCG_EfiSpecIDEvent to determine digest algorithms in use.
 fn parse_spec_id_event(event_data: &[u8]) -> anyhow::Result<Vec<DigestSpec>> {
     let mut cur = Cursor::new(event_data);
-
-    // Signature: 16 bytes "Spec ID Event03\0"
     let sig = read_bytes(&mut cur, 16)?;
     let sig_str = String::from_utf8_lossy(&sig);
     if !sig_str.starts_with("Spec ID Event") {
         bail!("not a TCG Spec ID Event: {sig_str:?}");
     }
-
-    // platformClass (u32), specVersionMinor (u8), specVersionMajor (u8),
-    // specErrata (u8), uintnSize (u8)
     let _platform_class = read_u32(&mut cur)?;
     let mut ver = [0u8; 4];
     cur.read_exact(&mut ver)?;
@@ -170,10 +147,6 @@ fn parse_spec_id_event(event_data: &[u8]) -> anyhow::Result<Vec<DigestSpec>> {
     Ok(specs)
 }
 
-// -----------------------------------------------------------------------
-// Event log parser
-// -----------------------------------------------------------------------
-
 fn parse_event_log(data: &[u8]) -> anyhow::Result<Value> {
     if data.len() < 32 {
         bail!("event log too short ({} bytes)", data.len());
@@ -181,15 +154,10 @@ fn parse_event_log(data: &[u8]) -> anyhow::Result<Value> {
 
     let mut cur = Cursor::new(data);
     let mut events = Vec::new();
-
-    // First event is always legacy format (TCG_PCClientPCREvent).
     let first = parse_legacy_event(&mut cur)?;
     let digest_specs = parse_spec_id_event_from_entry(&first)?;
     events.push(first);
-
-    // Remaining events use the crypto-agile format if we got specs.
     if digest_specs.is_empty() {
-        // Legacy mode: all events are SHA-1 only.
         while cur.position() < data.len() as u64 {
             match parse_legacy_event(&mut cur) {
                 Ok(ev) => events.push(ev),
@@ -212,7 +180,6 @@ fn parse_spec_id_event_from_entry(event: &Value) -> anyhow::Result<Vec<DigestSpe
     let event_type = event.get("EventType").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
 
     if event_type != 0x03 {
-        // Not EV_NO_ACTION — return empty (legacy mode).
         return Ok(Vec::new());
     }
 
@@ -262,7 +229,6 @@ fn parse_crypto_agile_event(
     let mut digests = serde_json::Map::new();
     for _ in 0..digest_count {
         let alg_id = read_u16(cur)?;
-        // Find digest size from spec or fall back to known sizes.
         let size = specs
             .iter()
             .find(|s| s.alg_id == alg_id)

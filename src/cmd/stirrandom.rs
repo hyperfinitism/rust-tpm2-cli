@@ -9,10 +9,6 @@ use tss_esapi::structures::SensitiveData;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
-
-/// Add external entropy to the TPM RNG state.
-///
-/// Wraps TPM2_StirRandom.
 #[derive(Parser)]
 pub struct StirRandomCmd {
     /// Input file containing entropy data
@@ -22,7 +18,7 @@ pub struct StirRandomCmd {
 
 impl StirRandomCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let data = std::fs::read(&self.input)
             .with_context(|| format!("reading entropy from {}", self.input.display()))?;

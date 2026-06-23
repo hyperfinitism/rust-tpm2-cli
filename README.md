@@ -10,7 +10,8 @@ The `rust-tpm2-cli` crate provides a suite of Rust-based command-line tools for 
 
 > [!NOTE]
 > This project is heavily inspired by [tpm2-tools](https://github.com/tpm2-software/tpm2-tools) and gratefully acknowledges the work of its contributors.
-> The (sub)command names and CLI argument names are designed to be largely compatible with those of `tpm2-tools`.
+> Although the initial design attempted to preserve its subcommand and argument names, compatibility with the `tpm2-tools` command-line API is no longer a project goal.
+> `rust-tpm2-cli` now defines an independent, intentionally different API.
 > See the [Comparison with tpm2-tools](#comparison-with-tpm2-tools) section for details.
 
 ## Quick start
@@ -75,7 +76,8 @@ This can be overridden per invocation with the `--tcti, -T` global option.
 #### Using a platform TPM
 
 > [!CAUTION]
-> A platform TPM may already be in use by the system for measured boot, full disk encryption, or remote attestation. Careless operations — such as clearing hierarchies or changing auth values — can irreversibly break these functions.
+> The platform TPM may already be in use by the system for purposes such as measured boot, full-disk encryption, remote attestation and sealing/unsealing of credentials.
+> Careless operations (such as clearing hierarchies or changing auth values) can irreversibly break these functions.
 > Use a software TPM emulator such as `swtpm` or `mssim` for development and testing.
 > See also [Using `swtpm`](#using-swtpm).
 
@@ -222,7 +224,7 @@ tpm2 verifysignature -c file:key.ctx -d digest.bin -s sig.bin
 ```bash
 # Create and persist an Endorsement Key (EK)
 tpm2 createek -c ek.ctx -G ecc -u ek.pub
-tpm2 evictcontrol 0x81010001 -C o -c file:ek.ctx
+tpm2 evictcontrol 0x81010002 -C o -c file:ek.ctx
 
 # Create and persist an Attestation Key (AK) 
 tpm2 createak -C file:ek.ctx -c ak.ctx -G ecc -u ak.pub
@@ -307,50 +309,52 @@ tpm2 pcrreset 16
 
 ## Comparison with tpm2-tools
 
-While broadly following the `tpm2-tools` APIs, `rust-tpm2-cli` is a from-scratch implementation.
-The key differences are:
+`rust-tpm2-cli` is inspired by `tpm2-tools`, but it is not a drop-in replacement and does not aim to preserve command-line compatibility.
+Scripts written for one project generally need to be adapted before they can be used with the other.
 
-| - | `rust-tpm2-cli` | `tpm2-tools` |
+### Implementation and TSS architecture
+
+| | `rust-tpm2-cli` | `tpm2-tools` |
 | - | --------------- | ------------ |
-| **Language** | Rust | C |
-| **TPM Software Stack (TSS)** | [rust-tss-esapi](https://github.com/parallaxsecond/rust-tss-esapi)[^1] | [tpm2-tss](https://github.com/tpm2-software/tpm2-tss) |
-| **Binary size order**[^2] | several MB | sub MB |
+| **Implementation language** | Rust | C |
+| **Application-facing ESAPI** | [rust-tss-esapi](https://github.com/parallaxsecond/rust-tss-esapi) | [tpm2-tss](https://github.com/tpm2-software/tpm2-tss) ESAPI |
+| **Underlying TSS implementation** | Delegates TPM communication to the C-based `tpm2-tss` stack | All TSS layers are provided directly by the C-based `tpm2-tss` stack |
 
-`tpm2-tools` has a significantly smaller binary footprint, making it a better fit for resource-constrained environments such as IoT devices with limited storage or memory.
-It also benefits from a long track record and broad backward compatibility.
+The upstream `rust-tss-esapi` wraps the `tpm2-tss` ESAPI, which in turn uses the lower layers of the C-based `tpm2-tss` stack, so it is not a pure-Rust TSS implementation.
+`rust-tpm2-cli` nevertheless benefits from Rust's memory-safety guarantees and type system throughout its own implementation and at the application-facing ESAPI boundary.
+Commands use `rust-tss-esapi` directly wherever it provides a wrapper; commands not yet exposed by that library use raw ESYS only as a narrowly scoped fallback.
 
-`rust-tpm2-cli` trades binary size for Rust's memory safety guarantees, rich type system, and expressive language features, which reduce entire classes of bugs at compile time.
+### Type-driven argument parsing
 
-### API refinements
+`rust-tpm2-cli` follows the [“Parse, don't validate”](https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/) idiom as far as practical.
+CLI strings are converted at the command-line boundary into domain types such as TPM handles, algorithms, authorization values, PCR selections, and command-specific enums.
+Invalid combinations and values are therefore rejected by the argument parser ([`clap`](https://github.com/clap-rs/clap)) before TPM command execution whenever they can be determined without accessing external files or the TPM itself.
 
-`rust-tpm2-cli` introduces a number of deliberate improvements (breaking changes) for clarity and consistency:
+### CLI API and command coverage
 
-- **Explicit handle vs. context arguments**:
-  `tpm2-tools` accepts either a TPM handle (hex string) or a raw context file path through a single argument.
-  `rust-tpm2-cli` requires such arguments to have prefix `hex:` or `file:`, making the type of the input unambiguous.
+- **TPM command names are authoritative**:
+  The TPM 2.0 Library Specification is the source of truth for TPM-facing subcommand names.
+  For example, the TPM command `TPM2_EncryptDecrypt2` corresponds to the  `encryptdecrypt2` subcommand, not `encryptdecrypt`.
+  (The latter should correspond to the deprecated `TPM2_EncryptDecrpt`.)
 
-- **Extended context file support**:
-  Some arguments in `tpm2-tools` accept only a TPM handle in hex string form without an apparent reason (e.g. public key in `checkquote`).
-  `rust-tpm2-cli` removes this restriction and allows a context file to be specified wherever it is semantically appropriate.
+- **Command coverage is independent of `tpm2-tools`**:
+  The supported command sets are not identical, and `rust-tpm2-cli` exposes several TPM commands that are not implemented as `tpm2-tools` subcommands.
+  Non-TPM utility commands are retained where useful, but their help text identifies them as utilities and names the TPM commands used to implement them.
 
-- **Subcommand splitting**:
-  Subcommands that conflate distinct operations have been separated.
-  For example, the `encryptdecrypt` subcommand of `tpm2-tools` is split into two dedicated subcommands `encrypt` and `decrypt`.
-  (At the moment, `encryptdecrypt` is kept for compatibility.)
+- **Handle and context sources are explicit**:
+  Arguments that can refer to either a loaded TPM handle or a saved context require a `hex:` or `file:` prefix.
+  For example, `hex:0x81010001` selects a handle while `file:key.ctx` selects a context file.
 
-- **Flexible logging**:
-  `rust-tpm2-cli` uses [flexi_logger](https://github.com/emabee/flexi_logger) for flexible logging control via CLI flags.
-  Logs can also be written to a file.
+- **Semantically valid input forms are accepted**:
+  Some commands in `tpm2-tools` restrict arguments to hexadecimal handles for no particular TPM-level reason.
+  `rust-tpm2-cli` also accepts a context file when the operation can resolve one safely.
+
+### Logging
+
+`rust-tpm2-cli` uses [`flexi_logger`](https://github.com/emabee/flexi_logger) and provides global options for selecting the log level and writing logs to a file.
+Detailed `Debug` and `Trace` instrumentation is not yet comprehensive and remains to be implemented.
 
 ## Licenses
 
 - The source code is licensed under [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0).
 - The project logo assets are licensed under [CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/).
-
-## Footnotes
-
-[^1]: Note that `rust-tss-esapi` is a Rust wrapper around the C-based `tpm2-tss` library, not a pure Rust implementation.
-Both projects currently depend on the same underlying C library for TPM communication.
-
-[^2]: Approx. 6.5MB (6,523,504B) vs. 0.85MB (850,552B). The actual sizes depend on both the version and the build environment.
-This comparison is based on `rust-tpm2-cli` (commit: `3986a79271c64cbc29a58453d56ebd00e776d1ea`) and `tpm2-tools` (commit: `bc4cf8bca83c15deb62af448f609caa8ba0111da`).
