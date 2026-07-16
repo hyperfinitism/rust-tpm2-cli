@@ -41,12 +41,20 @@ jobs:
         os-arch:
           - ubuntu-24.04-x86_64
           - ubuntu-24.04-aarch64
+          - ubuntu-26.04-x86_64
+          - ubuntu-26.04-aarch64
         include:
           - os-arch: ubuntu-24.04-x86_64
             runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
           - os-arch: ubuntu-24.04-aarch64
             runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os-arch: ubuntu-26.04-x86_64
+            runner: ubuntu-26.04
+            target: x86_64-unknown-linux-gnu
+          - os-arch: ubuntu-26.04-aarch64
+            runner: ubuntu-26.04-arm
             target: aarch64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
