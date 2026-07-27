@@ -7,13 +7,13 @@
 #![allow(dead_code)]
 
 use assert_cmd::Command;
-use assert_fs::TempDir;
 use socket2::{Domain, SockAddr, Socket, Type};
 use std::io::Write;
 use std::net::TcpStream;
 use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
+use tempfile::TempDir;
 
 /// Maximum number of swtpm startup attempts before giving up.
 const MAX_SWTPM_RETRIES: usize = 5;
