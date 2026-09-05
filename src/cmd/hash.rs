@@ -8,7 +8,6 @@ use clap::Parser;
 use log::info;
 use tss_esapi::interface_types::algorithm::HashingAlgorithm;
 use tss_esapi::structures::MaxBuffer;
-use tss_esapi::tss2_esys::TPMT_TK_HASHCHECK;
 
 use tss_esapi::interface_types::reserved_handles::Hierarchy;
 
@@ -16,13 +15,9 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::output;
 use crate::parse;
-
-/// Compute a hash using the TPM.
-///
-/// Reads data from stdin or a file and produces a hash digest.
 #[derive(Parser)]
 pub struct HashCmd {
-    /// Hash algorithm (sha1, sha256, sha384, sha512)
+    /// Hash algorithm
     #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
     pub algorithm: HashingAlgorithm,
 
@@ -48,7 +43,7 @@ pub struct HashCmd {
 
 impl HashCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let alg = self.algorithm;
 
@@ -72,15 +67,7 @@ impl HashCmd {
         }
 
         if let Some(ref path) = self.ticket {
-            let tss_ticket: TPMT_TK_HASHCHECK = ticket
-                .try_into()
-                .map_err(|e| anyhow::anyhow!("failed to convert ticket: {e:?}"))?;
-            let bytes = unsafe {
-                std::slice::from_raw_parts(
-                    &tss_ticket as *const TPMT_TK_HASHCHECK as *const u8,
-                    std::mem::size_of::<TPMT_TK_HASHCHECK>(),
-                )
-            };
+            let bytes = crate::ticket::marshall_ticket(&ticket);
             std::fs::write(path, bytes)
                 .with_context(|| format!("writing ticket to {}", path.display()))?;
             info!("ticket saved to {}", path.display());

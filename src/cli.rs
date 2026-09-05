@@ -5,6 +5,8 @@ use flexi_logger::LevelFilter;
 use std::path::PathBuf;
 
 use crate::cmd;
+use crate::parse;
+use crate::tcti::TctiConfig;
 
 #[derive(Parser)]
 #[command(name = "tpm2", version, about = "Rust-based CLI tools for TPM 2.0")]
@@ -19,8 +21,8 @@ pub struct Cli {
 #[derive(Parser)]
 pub struct GlobalOpts {
     /// TCTI configuration (e.g. device:/dev/tpm0, swtpm:host=localhost,port=2321)
-    #[arg(short = 'T', long = "tcti", env = "RUST_TPM2_CLI_TCTI")]
-    pub tcti: Option<String>,
+    #[arg(short = 'T', long = "tcti", env = "RUST_TPM2_CLI_TCTI", value_parser = parse::parse_tcti_config)]
+    pub tcti: Option<TctiConfig>,
 
     /// Enable errata fixups
     #[arg(short = 'Z', long = "enable-errata")]
@@ -53,216 +55,456 @@ macro_rules! tpm2_commands {
 }
 
 tpm2_commands! {
-    /// Activate a credential and recover the secret
+    /// Recover a credential protected for a TPM object.
+    ///
+    /// Wraps TPM2_ActivateCredential.
     Activatecredential(cmd::activatecredential::ActivateCredentialCmd),
-    /// Certify that an object is loaded in the TPM
+    /// Produce signed evidence that an object is loaded and self-consistent.
+    ///
+    /// Wraps TPM2_Certify.
     Certify(cmd::certify::CertifyCmd),
-    /// Certify creation data for an object
+    /// Attest to the association between an object and its creation data.
+    ///
+    /// Wraps TPM2_CertifyCreation.
     Certifycreation(cmd::certifycreation::CertifyCreationCmd),
-    /// Change auth value for an object or hierarchy
+    /// Generate X.509 certificate components for a loaded object.
+    ///
+    /// Wraps TPM2_CertifyX509, deprecated since TPM 2.0 Library version 184.
+    Certifyx509(cmd::certifyx509::CertifyX509Cmd),
+    /// Change the authorization value of an object or hierarchy.
+    ///
+    /// Utility that invokes TPM2_ObjectChangeAuth or TPM2_HierarchyChangeAuth for the selected target.
     Changeauth(cmd::changeauth::ChangeAuthCmd),
-    /// Change the endorsement primary seed
+    /// Replace the endorsement primary seed and flush affected objects.
+    ///
+    /// Wraps TPM2_ChangeEPS.
     Changeeps(cmd::changeeps::ChangeEpsCmd),
-    /// Change the platform primary seed
+    /// Replace the platform primary seed and flush affected objects.
+    ///
+    /// Wraps TPM2_ChangePPS.
     Changepps(cmd::changepps::ChangePpsCmd),
-    /// Verify a TPM quote
+    /// Validate a quote, its signature, and optional PCR expectations.
+    ///
+    /// Utility that verifies TPM2_Quote output using TPM2_Hash and TPM2_VerifySignature.
     Checkquote(cmd::checkquote::CheckQuoteCmd),
-    /// Clear the TPM
+    /// Remove objects and authorization values associated with TPM ownership.
+    ///
+    /// Wraps TPM2_Clear.
     Clear(cmd::clear::ClearCmd),
-    /// Enable or disable TPM2_Clear
+    /// Enable or disable execution of TPM2_Clear.
+    ///
+    /// Wraps TPM2_ClearControl.
     Clearcontrol(cmd::clearcontrol::ClearControlCmd),
-    /// Adjust the clock rate
+    /// Adjust the rate at which the TPM clock advances.
+    ///
+    /// Wraps TPM2_ClockRateAdjust.
     Clockrateadjust(cmd::clockrateadjust::ClockRateAdjustCmd),
-    /// Perform the first part of an ECC anonymous signing operation
+    /// Advance the TPM clock to a caller-selected value.
+    ///
+    /// Wraps TPM2_ClockSet.
+    Clockset(cmd::clockset::ClockSetCmd),
+    /// Perform the first phase of an anonymous ECC signing operation.
+    ///
+    /// Wraps TPM2_Commit.
     Commit(cmd::commit::CommitCmd),
-    /// Load a previously saved context back into the TPM
+    /// Restore a previously saved object or session context.
+    ///
+    /// Wraps TPM2_ContextLoad.
     Contextload(cmd::contextload::ContextLoadCmd),
-    /// Save a loaded object's context to a file
+    /// Save a loaded object or session context outside the TPM.
+    ///
+    /// Wraps TPM2_ContextSave.
     Contextsave(cmd::contextsave::ContextSaveCmd),
-    /// Create a child key
+    /// Create an object protected by a parent object.
+    ///
+    /// Wraps TPM2_Create.
     Create(cmd::create::CreateCmd),
-    /// Create an attestation key (AK) under an EK
+    /// Create and load a profile-oriented attestation key beneath an endorsement key.
+    ///
+    /// Utility implemented with TPM2_Create, TPM2_Load, and TPM2_ReadPublic.
     Createak(cmd::createak::CreateAkCmd),
-    /// Create a TCG-compliant endorsement key (EK)
+    /// Create a TCG profile-oriented endorsement key and optionally persist it.
+    ///
+    /// Utility implemented with TPM2_CreatePrimary and TPM2_EvictControl.
     Createek(cmd::createek::CreateEkCmd),
-    /// Create a policy from a trial session
+    /// Calculate a simple policy digest in a trial session.
+    ///
+    /// Utility implemented with TPM2_StartAuthSession, policy commands, and TPM2_PolicyGetDigest.
     Createpolicy(cmd::createpolicy::CreatePolicyCmd),
-    /// Create a primary key
+    /// Create and load a primary object under a hierarchy.
+    ///
+    /// Wraps TPM2_CreatePrimary.
     Createprimary(cmd::createprimary::CreatePrimaryCmd),
-    /// Decrypt data with a symmetric TPM key
-    Decrypt(cmd::decrypt::DecryptCmd),
-    /// Reset or configure dictionary attack lockout
+    /// Reset dictionary-attack lockout or configure its thresholds and recovery timers.
+    ///
+    /// Utility that invokes TPM2_DictionaryAttackLockReset or TPM2_DictionaryAttackParameters.
     Dictionarylockout(cmd::dictionarylockout::DictionaryLockoutCmd),
-    /// Duplicate an object for use on another TPM
+    /// Duplicate an object for use under another parent.
+    ///
+    /// Wraps TPM2_Duplicate.
     Duplicate(cmd::duplicate::DuplicateCmd),
-    /// Generate an ephemeral ECDH key pair and compute a shared secret
+    /// Generate an ephemeral ECDH key pair and its shared secret.
+    ///
+    /// Wraps TPM2_ECDH_KeyGen.
     Ecdhkeygen(cmd::ecdhkeygen::EcdhKeygenCmd),
-    /// Perform ECDH key exchange Z-point generation
+    /// Compute an ECDH shared secret with a loaded private key.
+    ///
+    /// Wraps TPM2_ECDH_ZGen.
     Ecdhzgen(cmd::ecdhzgen::EcdhZgenCmd),
-    /// Create an ephemeral key for two-phase key exchange
+    /// Generate an ephemeral key for a two-phase key exchange.
+    ///
+    /// Wraps TPM2_EC_Ephemeral.
     Ecephemeral(cmd::ecephemeral::EcEphemeralCmd),
-    /// Encrypt data with a symmetric TPM key
-    Encrypt(cmd::encrypt::EncryptCmd),
-    /// Encrypt or decrypt data with a symmetric key
-    Encryptdecrypt(cmd::encryptdecrypt::EncryptDecryptCmd),
-    /// Parse and display a binary TPM2 event log
+    /// Encrypt or decrypt data with a symmetric TPM key.
+    ///
+    /// Wraps TPM2_EncryptDecrypt2.
+    Encryptdecrypt2(cmd::encryptdecrypt2::EncryptDecrypt2Cmd),
+    /// Parse and display a binary TCG event log.
+    ///
+    /// Client-side utility; it does not invoke a TPM command.
     Eventlog(cmd::eventlog::EventLogCmd),
-    /// Make a transient object persistent (or evict a persistent object)
+    /// Persist a transient object or evict a persistent object.
+    ///
+    /// Wraps TPM2_EvictControl.
     Evictcontrol(cmd::evictcontrol::EvictControlCmd),
-    /// Flush a context (handle) from the TPM
+    /// Remove one or more loaded contexts from TPM memory.
+    ///
+    /// Wraps TPM2_FlushContext; bulk modes use TPM2_GetCapability and repeat the command.
     Flushcontext(cmd::flushcontext::FlushContextCmd),
-    /// Query TPM capabilities and properties
+    /// Query algorithms, handles, properties, and other TPM capabilities.
+    ///
+    /// Wraps TPM2_GetCapability.
     Getcap(cmd::getcap::GetCapCmd),
-    /// Get the command audit digest
+    /// Return the current command audit digest in a signed attestation.
+    ///
+    /// Wraps TPM2_GetCommandAuditDigest.
     Getcommandauditdigest(cmd::getcommandauditdigest::GetCommandAuditDigestCmd),
-    /// Get ECC curve parameters
+    /// Return the parameters of an ECC curve supported by the TPM.
+    ///
+    /// Wraps TPM2_ECC_Parameters.
     Geteccparameters(cmd::geteccparameters::GetEccParametersCmd),
-    /// Retrieve the EK certificate from TPM NV storage
+    /// Retrieve an endorsement-key certificate from a profile-defined NV index.
+    ///
+    /// Utility implemented with TPM2_NV_ReadPublic and TPM2_NV_Read.
     Getekcertificate(cmd::getekcertificate::GetEkCertificateCmd),
-    /// Get random bytes from the TPM
+    /// Return random bytes generated by the TPM.
+    ///
+    /// Wraps TPM2_GetRandom.
     Getrandom(cmd::getrandom::GetRandomCmd),
-    /// Get the session audit digest
+    /// Return the current audit digest of a session in a signed attestation.
+    ///
+    /// Wraps TPM2_GetSessionAuditDigest.
     Getsessionauditdigest(cmd::getsessionauditdigest::GetSessionAuditDigestCmd),
-    /// Get the TPM self-test result
+    /// Return data and status from the most recent TPM self-test.
+    ///
+    /// Wraps TPM2_GetTestResult.
     Gettestresult(cmd::gettestresult::GetTestResultCmd),
-    /// Get a signed timestamp from the TPM
+    /// Return TPM time and clock data in a signed attestation.
+    ///
+    /// Wraps TPM2_GetTime.
     Gettime(cmd::gettime::GetTimeCmd),
-    /// Compute a hash using the TPM
+    /// Compute a digest and validation ticket for a message.
+    ///
+    /// Wraps TPM2_Hash.
     Hash(cmd::hash::HashCmd),
-    /// Start an incremental hash sequence
+    /// Start an incremental hash sequence.
+    ///
+    /// Wraps TPM2_HashSequenceStart.
     Hashsequencestart(cmd::hashsequencestart::HashSequenceStartCmd),
-    /// Enable or disable TPM hierarchies
+    /// Enable or disable a hierarchy and its associated NV storage.
+    ///
+    /// Wraps TPM2_HierarchyControl.
     Hierarchycontrol(cmd::hierarchycontrol::HierarchyControlCmd),
-    /// Compute HMAC using a TPM key
+    /// Compute an HMAC over a message with a loaded key.
+    ///
+    /// Wraps TPM2_HMAC.
     Hmac(cmd::tpmhmac::HmacCmd),
-    /// Start an incremental HMAC sequence
+    /// Start an incremental HMAC sequence with a loaded key.
+    ///
+    /// Wraps TPM2_HMAC_Start.
     Hmacsequencestart(cmd::hmacsequencestart::HmacSequenceStartCmd),
-    /// Import a wrapped key into the TPM
+    /// Import a duplicated object beneath a new parent.
+    ///
+    /// Wraps TPM2_Import.
     Import(cmd::import::ImportCmd),
-    /// Run incremental self-test on specified algorithms
+    /// Test selected algorithms and return those still requiring testing.
+    ///
+    /// Wraps TPM2_IncrementalSelfTest through raw ESYS because rust-tss-esapi has no wrapper.
     Incrementalselftest(cmd::incrementalselftest::IncrementalSelfTestCmd),
-    /// Load a key into the TPM
+    /// Load an object created beneath a parent into TPM memory.
+    ///
+    /// Wraps TPM2_Load.
     Load(cmd::load::LoadCmd),
-    /// Load an external key into the TPM
+    /// Load an externally generated public or sensitive object.
+    ///
+    /// Wraps TPM2_LoadExternal.
     Loadexternal(cmd::loadexternal::LoadExternalCmd),
-    /// Create a credential blob for a TPM key
+    /// Protect a credential so it can be activated by a particular TPM object.
+    ///
+    /// Wraps TPM2_MakeCredential.
     Makecredential(cmd::makecredential::MakeCredentialCmd),
-    /// Certify the contents of an NV index
+    /// Attest to the contents of an NV index or a portion of it.
+    ///
+    /// Wraps TPM2_NV_Certify.
     Nvcertify(cmd::nvcertify::NvCertifyCmd),
-    /// Define an NV index
+    /// Change the authorization value for an NV index.
+    ///
+    /// Wraps TPM2_NV_ChangeAuth.
+    Nvchangeauth(cmd::nvchangeauth::NvChangeAuthCmd),
+    /// Define and initialize the metadata for an NV index.
+    ///
+    /// Wraps TPM2_NV_DefineSpace.
     Nvdefine(cmd::nvdefine::NvDefineCmd),
-    /// Extend data into an NV index
+    /// Hash new data into an extend-type NV index.
+    ///
+    /// Wraps TPM2_NV_Extend.
     Nvextend(cmd::nvextend::NvExtendCmd),
-    /// Increment an NV counter
+    /// Write-lock every NV index with the global-lock attribute set.
+    ///
+    /// Wraps TPM2_NV_GlobalWriteLock.
+    Nvglobalwritelock(cmd::nvglobalwritelock::NvGlobalWriteLockCmd),
+    /// Increment a counter-type NV index.
+    ///
+    /// Wraps TPM2_NV_Increment.
     Nvincrement(cmd::nvincrement::NvIncrementCmd),
-    /// Read data from an NV index
+    /// Read bytes from an NV index.
+    ///
+    /// Wraps TPM2_NV_Read.
     Nvread(cmd::nvread::NvReadCmd),
-    /// Lock an NV index for reading
+    /// Prevent further reads from a read-stclear NV index until restart.
+    ///
+    /// Wraps TPM2_NV_ReadLock.
     Nvreadlock(cmd::nvreadlock::NvReadLockCmd),
-    /// Read the public area of an NV index
+    /// Return the public metadata and name of an NV index.
+    ///
+    /// Wraps TPM2_NV_ReadPublic.
     Nvreadpublic(cmd::nvreadpublic::NvReadPublicCmd),
-    /// Set bits in an NV bit field
+    /// Set selected bits in a bit-field NV index.
+    ///
+    /// Wraps TPM2_NV_SetBits.
     Nvsetbits(cmd::nvsetbits::NvSetBitsCmd),
-    /// Remove an NV index
+    /// Remove an ordinary NV index.
+    ///
+    /// Wraps TPM2_NV_UndefineSpace.
     Nvundefine(cmd::nvundefine::NvUndefineCmd),
-    /// Write data to an NV index
+    /// Remove an NV index with the policy-delete attribute set.
+    ///
+    /// Wraps TPM2_NV_UndefineSpaceSpecial.
+    Nvundefinespacespecial(cmd::nvundefinespacespecial::NvUndefineSpaceSpecialCmd),
+    /// Write bytes to an NV index.
+    ///
+    /// Wraps TPM2_NV_Write.
     Nvwrite(cmd::nvwrite::NvWriteCmd),
-    /// Lock an NV index for writing
+    /// Prevent further writes to an NV index according to its attributes.
+    ///
+    /// Wraps TPM2_NV_WriteLock.
     Nvwritelock(cmd::nvwritelock::NvWriteLockCmd),
-    /// Allocate PCR banks
+    /// Configure the PCR banks available after the next TPM reset.
+    ///
+    /// Wraps TPM2_PCR_Allocate.
     Pcrallocate(cmd::pcrallocate::PcrAllocateCmd),
-    /// Extend a PCR with event data
+    /// Hash event data in the TPM and extend the resulting digests into a PCR.
+    ///
+    /// Wraps TPM2_PCR_Event.
     Pcrevent(cmd::pcrevent::PcrEventCmd),
-    /// Extend a PCR with a digest
+    /// Extend one or more caller-provided digests into a PCR.
+    ///
+    /// Wraps TPM2_PCR_Extend.
     Pcrextend(cmd::pcrextend::PcrExtendCmd),
-    /// Read PCR values
+    /// Read selected PCR values and their update counter.
+    ///
+    /// Wraps TPM2_PCR_Read.
     Pcrread(cmd::pcrread::PcrReadCmd),
-    /// Reset a PCR register
+    /// Reset a resettable PCR in every allocated bank.
+    ///
+    /// Wraps TPM2_PCR_Reset.
     Pcrreset(cmd::pcrreset::PcrResetCmd),
-    /// Extend a policy with PolicyAuthorize
+    /// Set the authorization policy for a PCR or PCR group.
+    ///
+    /// Wraps TPM2_PCR_SetAuthPolicy.
+    Pcrsetauthpolicy(cmd::pcrsetauthpolicy::PcrSetAuthPolicyCmd),
+    /// Change the authorization value for a PCR or PCR group.
+    ///
+    /// Wraps TPM2_PCR_SetAuthValue.
+    Pcrsetauthvalue(cmd::pcrsetauthvalue::PcrSetAuthValueCmd),
+    /// Replace a policy digest with one approved by an authorized key.
+    ///
+    /// Wraps TPM2_PolicyAuthorize.
     Policyauthorize(cmd::policyauthorize::PolicyAuthorizeCmd),
-    /// Extend a policy using NV-stored policy
+    /// Replace a policy digest with an approved policy stored in NV.
+    ///
+    /// Wraps TPM2_PolicyAuthorizeNV.
     Policyauthorizenv(cmd::policyauthorizenv::PolicyAuthorizeNvCmd),
-    /// Extend a policy with PolicyAuthValue
+    /// Require authorization with the authValue of the authorized entity.
+    ///
+    /// Wraps TPM2_PolicyAuthValue.
     Policyauthvalue(cmd::policyauthvalue::PolicyAuthValueCmd),
-    /// Extend a policy with PolicyCommandCode
+    /// Restrict a policy to one TPM command code.
+    ///
+    /// Wraps TPM2_PolicyCommandCode.
     Policycommandcode(cmd::policycommandcode::PolicyCommandCodeCmd),
-    /// Extend a policy with PolicyCounterTimer
+    /// Gate a policy on a comparison against TPM clock or counter data.
+    ///
+    /// Wraps TPM2_PolicyCounterTimer.
     Policycountertimer(cmd::policycountertimer::PolicyCounterTimerCmd),
-    /// Extend a policy with PolicyCpHash
+    /// Bind a policy to a digest of command parameters.
+    ///
+    /// Wraps TPM2_PolicyCpHash.
     Policycphash(cmd::policycphash::PolicyCpHashCmd),
-    /// Extend a policy with PolicyDuplicationSelect
+    /// Bind a policy to an object's duplication target.
+    ///
+    /// Wraps TPM2_PolicyDuplicationSelect.
     Policyduplicationselect(cmd::policyduplicationselect::PolicyDuplicationSelectCmd),
-    /// Extend a policy with PolicyLocality
+    /// Return the current digest of a policy session.
+    ///
+    /// Wraps TPM2_PolicyGetDigest.
+    Policygetdigest(cmd::policygetdigest::PolicyGetDigestCmd),
+    /// Restrict a policy to selected TPM localities.
+    ///
+    /// Wraps TPM2_PolicyLocality.
     Policylocality(cmd::policylocality::PolicyLocalityCmd),
-    /// Extend a policy with PolicyNameHash
+    /// Bind a policy to a digest of object names.
+    ///
+    /// Wraps TPM2_PolicyNameHash.
     Policynamehash(cmd::policynamehash::PolicyNameHashCmd),
-    /// Extend a policy bound to NV index contents
+    /// Gate a policy on a comparison with NV index contents.
+    ///
+    /// Wraps TPM2_PolicyNV.
     Policynv(cmd::policynv::PolicyNvCmd),
-    /// Extend a policy with PolicyNvWritten
+    /// Gate a policy on whether an NV index has been written.
+    ///
+    /// Wraps TPM2_PolicyNvWritten.
     Policynvwritten(cmd::policynvwritten::PolicyNvWrittenCmd),
-    /// Extend a policy with PolicyOR
+    /// Combine policy alternatives with a logical OR.
+    ///
+    /// Wraps TPM2_PolicyOR.
     Policyor(cmd::policyor::PolicyOrCmd),
-    /// Extend a policy with PolicyPassword
+    /// Require plaintext password authorization for the authorized entity.
+    ///
+    /// Wraps TPM2_PolicyPassword.
     Policypassword(cmd::policypassword::PolicyPasswordCmd),
-    /// Extend a policy with PolicyPCR
+    /// Gate a policy on selected PCR values.
+    ///
+    /// Wraps TPM2_PolicyPCR.
     Policypcr(cmd::policypcr::PolicyPcrCmd),
-    /// Reset a policy session
+    /// Require asserted physical presence to satisfy a policy.
+    ///
+    /// Wraps TPM2_PolicyPhysicalPresence.
+    Policyphysicalpresence(cmd::policyphysicalpresence::PolicyPhysicalPresenceCmd),
+    /// Reset a policy session and its policy digest.
+    ///
+    /// Wraps TPM2_PolicyRestart.
     Policyrestart(cmd::policyrestart::PolicyRestartCmd),
-    /// Extend a policy session with PolicySecret
+    /// Authorize a policy assertion using another entity's secret.
+    ///
+    /// Wraps TPM2_PolicySecret.
     Policysecret(cmd::policysecret::PolicySecretCmd),
-    /// Extend a policy with PolicySigned
+    /// Authorize a policy assertion with an external signature.
+    ///
+    /// Wraps TPM2_PolicySigned.
     Policysigned(cmd::policysigned::PolicySignedCmd),
-    /// Extend a policy with PolicyTemplate
+    /// Bind a policy to an object creation template digest.
+    ///
+    /// Wraps TPM2_PolicyTemplate.
     Policytemplate(cmd::policytemplate::PolicyTemplateCmd),
-    /// Extend a policy with a ticket
+    /// Satisfy a policy assertion using a previously issued authorization ticket.
+    ///
+    /// Wraps TPM2_PolicyTicket.
     Policyticket(cmd::policyticket::PolicyTicketCmd),
-    /// Decode and display a TPM data structure
+    /// Decode and display a marshaled TPM data structure.
+    ///
+    /// Client-side utility; it does not invoke a TPM command.
     Print(cmd::print::PrintCmd),
-    /// Generate a TPM quote
+    /// Produce a signed attestation over selected PCRs.
+    ///
+    /// Wraps TPM2_Quote.
     Quote(cmd::quote::QuoteCmd),
-    /// Decode a TPM response code
+    /// Decode a TPM response code into human-readable fields.
+    ///
+    /// Client-side utility; it does not invoke a TPM command.
     Rcdecode(cmd::rcdecode::RcDecodeCmd),
-    /// Read the TPM clock
+    /// Return the TPM time, clock, and reset/restart counters.
+    ///
+    /// Wraps TPM2_ReadClock.
     Readclock(cmd::readclock::ReadClockCmd),
-    /// Read the public area of a loaded object
+    /// Return the public area and names of a loaded object.
+    ///
+    /// Wraps TPM2_ReadPublic.
     Readpublic(cmd::readpublic::ReadPublicCmd),
-    /// RSA decrypt data
+    /// Decrypt or sign-pad data with a loaded RSA private key.
+    ///
+    /// Wraps TPM2_RSA_Decrypt.
     Rsadecrypt(cmd::rsadecrypt::RsaDecryptCmd),
-    /// RSA encrypt data
+    /// Encrypt or verify-pad data with a loaded RSA public key.
+    ///
+    /// Wraps TPM2_RSA_Encrypt.
     Rsaencrypt(cmd::rsaencrypt::RsaEncryptCmd),
-    /// Run the TPM self-test
+    /// Rewrap a duplicated object from one parent to another.
+    ///
+    /// Wraps TPM2_Rewrap.
+    Rewrap(cmd::rewrap::RewrapCmd),
+    /// Start TPM self-testing of implemented algorithms.
+    ///
+    /// Wraps TPM2_SelfTest.
     Selftest(cmd::selftest::SelfTestCmd),
-    /// Send a raw TPM command
+    /// Send a prebuilt TPM command buffer and return its raw response.
+    ///
+    /// Low-level transport utility; the input buffer determines the TPM command invoked.
     Send(cmd::send::SendCmd),
-    /// Complete a hash or HMAC sequence and retrieve the result
+    /// Complete a hash or HMAC sequence and return its digest and ticket.
+    ///
+    /// Wraps TPM2_SequenceComplete.
     Sequencecomplete(cmd::sequencecomplete::SequenceCompleteCmd),
-    /// Feed data into a hash or HMAC sequence
+    /// Add message data to an active hash or HMAC sequence.
+    ///
+    /// Wraps TPM2_SequenceUpdate.
     Sequenceupdate(cmd::sequenceupdate::SequenceUpdateCmd),
-    /// Configure session attributes
+    /// Modify attributes stored with an ESAPI session context.
+    ///
+    /// Client-side ESAPI utility; it does not invoke a TPM command.
     Sessionconfig(cmd::sessionconfig::SessionConfigCmd),
-    /// Set the TPM clock
-    Setclock(cmd::setclock::SetClockCmd),
-    /// Set or clear command audit status
+    /// Select commands included in the TPM command audit digest.
+    ///
+    /// Wraps TPM2_SetCommandCodeAuditStatus.
     Setcommandauditstatus(cmd::setcommandauditstatus::SetCommandAuditStatusCmd),
-    /// Set the primary policy for a hierarchy
+    /// Set the authorization policy for a hierarchy.
+    ///
+    /// Wraps TPM2_SetPrimaryPolicy.
     Setprimarypolicy(cmd::setprimarypolicy::SetPrimaryPolicyCmd),
-    /// Send TPM2_Shutdown
+    /// Prepare the TPM for an orderly shutdown.
+    ///
+    /// Wraps TPM2_Shutdown.
     Shutdown(cmd::shutdown::ShutdownCmd),
-    /// Sign data with a TPM key
+    /// Sign a caller-provided digest with a loaded key.
+    ///
+    /// Wraps TPM2_Sign, deprecated since TPM 2.0 Library version 185.
     Sign(cmd::sign::SignCmd),
-    /// Start a TPM authorization session
+    /// Start an HMAC, policy, or trial authorization session.
+    ///
+    /// Wraps TPM2_StartAuthSession.
     Startauthsession(cmd::startauthsession::StartAuthSessionCmd),
-    /// Send TPM2_Startup
+    /// Initialize TPM state after power-up or reset.
+    ///
+    /// Wraps TPM2_Startup.
     Startup(cmd::startup::StartupCmd),
-    /// Stir random data into the TPM RNG
+    /// Mix caller-provided entropy into the TPM random-number generator.
+    ///
+    /// Wraps TPM2_StirRandom.
     Stirrandom(cmd::stirrandom::StirRandomCmd),
-    /// Test if algorithm parameters are supported
+    /// Test whether a set of public algorithm parameters is supported.
+    ///
+    /// Wraps TPM2_TestParms.
     Testparms(cmd::testparms::TestParmsCmd),
-    /// Unseal data from a sealed object
+    /// Return sensitive data from a loaded sealed object.
+    ///
+    /// Wraps TPM2_Unseal.
     Unseal(cmd::unseal::UnsealCmd),
-    /// Verify a signature using a TPM key
+    /// Verify a signature over a caller-provided digest with a loaded key.
+    ///
+    /// Wraps TPM2_VerifySignature, deprecated since TPM 2.0 Library version 185.
     Verifysignature(cmd::verifysignature::VerifySignatureCmd),
-    /// Perform two-phase ECDH key exchange
+    /// Complete a two-phase ECC key exchange with a loaded private key.
+    ///
+    /// Wraps TPM2_ZGen_2Phase.
     Zgen2phase(cmd::zgen2phase::Zgen2PhaseCmd),
 }

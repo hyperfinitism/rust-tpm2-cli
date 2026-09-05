@@ -15,13 +15,10 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
 use crate::parse::{self, parse_context_source};
-use crate::session::{flush_policy_session, load_session_from_file, start_ek_policy_session};
-
-/// Activate a credential associated with a TPM object.
-///
-/// Wraps `TPM2_ActivateCredential`: given a credential blob produced by
-/// `tpm2 makecredential`, decrypts it using the credential key (typically
-/// an EK) and verifies the binding to the credentialed key (typically an AK).
+use crate::session::{
+    flush_policy_session, load_optional_auth_session, load_session_from_file,
+    start_ek_policy_session,
+};
 #[derive(Parser)]
 pub struct ActivateCredentialCmd {
     /// Credentialed key context — the object the credential is bound to (file:<path> or hex:<handle>)
@@ -32,17 +29,17 @@ pub struct ActivateCredentialCmd {
     #[arg(short = 'C', long = "credentialkey-context", value_parser = parse_context_source)]
     pub credential_key_context: ContextSource,
 
-    /// Auth value for the credentialed key
+    /// Authorization value for the credentialed key
     #[arg(short = 'p', long = "credentialedkey-auth", value_parser = parse::parse_auth)]
     pub credentialed_auth: Option<Auth>,
 
-    /// Auth for the credential key (EK).
+    /// Authorization value for the credential key (EK).
     ///
     /// Use `session:<path>` to supply an already-satisfied policy session,
     /// or a plain password / `hex:` / `file:` value for the endorsement
     /// hierarchy auth used when starting an internal EK policy session.
-    #[arg(short = 'P', long = "credentialkey-auth")]
-    pub credential_key_auth: Option<String>,
+    #[arg(short = 'P', long = "credentialkey-auth", value_parser = parse::parse_credential_key_auth)]
+    pub credential_key_auth: Option<parse::CredentialKeyAuth>,
 
     /// Input credential blob file (from tpm2 makecredential)
     #[arg(short = 'i', long = "credential-blob")]
@@ -51,22 +48,22 @@ pub struct ActivateCredentialCmd {
     /// Output file for the decrypted credential secret
     #[arg(short = 'o', long = "certinfo-data")]
     pub certinfo_data: PathBuf,
+
+    /// Session context file for credentialed key authorization
+    #[arg(short = 'S', long = "session")]
+    pub session: Option<PathBuf>,
 }
 
 impl ActivateCredentialCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let activate_handle = load_key_from_source(&mut ctx, &self.credentialed_context)?;
         let key_handle = load_key_from_source(&mut ctx, &self.credential_key_context)?;
-
-        // Set auth on the credentialed key (AK) if provided.
         if let Some(ref auth) = self.credentialed_auth {
             ctx.tr_set_auth(activate_handle.into(), auth.clone())
                 .context("failed to set credentialed key auth")?;
         }
-
-        // Read and parse the credential blob.
         let blob = std::fs::read(&self.credential_blob).with_context(|| {
             format!(
                 "reading credential blob: {}",
@@ -74,56 +71,36 @@ impl ActivateCredentialCmd {
             )
         })?;
         let (id_object, encrypted_secret) = parse_credential_blob(&blob)?;
-
-        // Determine the EK authorization session.
-        //
-        // If `-P session:<path>` is given, load the external (already
-        // satisfied) policy session from the file.  Otherwise start an
-        // internal EK policy session with PolicySecret(endorsement).
-        let external_session = self.is_external_session();
-        let ek_session = if let Some(path) = external_session {
-            load_session_from_file(&mut ctx, path.as_ref(), SessionType::Policy)?
-        } else {
-            // Set endorsement hierarchy auth if a password was given.
-            if let Some(ref a) = self.credential_key_auth {
-                let auth = parse::parse_auth(a)?;
-                let eh_obj: ObjectHandle = HierarchyAuth::Endorsement.into();
-                ctx.tr_set_auth(eh_obj, auth)
-                    .context("failed to set endorsement hierarchy auth")?;
+        let (ek_session, external_session) = match &self.credential_key_auth {
+            Some(parse::CredentialKeyAuth::Session(path)) => (
+                load_session_from_file(&mut ctx, path, SessionType::Policy)?,
+                true,
+            ),
+            auth => {
+                if let Some(parse::CredentialKeyAuth::Auth(auth)) = auth {
+                    let eh_obj: ObjectHandle = HierarchyAuth::Endorsement.into();
+                    ctx.tr_set_auth(eh_obj, auth.clone())
+                        .context("failed to set endorsement hierarchy auth")?;
+                }
+                let ps = start_ek_policy_session(&mut ctx)?;
+                (AuthSession::PolicySession(ps), false)
             }
-            let ps = start_ek_policy_session(&mut ctx)?;
-            AuthSession::PolicySession(ps)
         };
-
-        // ActivateCredential needs two auth sessions:
-        //   session 1 → credentialed key (AK): password
-        //   session 2 → credential key (EK): policy
-        ctx.set_sessions((Some(AuthSession::Password), Some(ek_session), None));
+        let activate_session = load_optional_auth_session(&mut ctx, self.session.as_deref())?;
+        ctx.set_sessions((Some(activate_session), Some(ek_session), None));
         let cert_info = ctx
             .activate_credential(activate_handle, key_handle, id_object, encrypted_secret)
             .context("TPM2_ActivateCredential failed")?;
         ctx.clear_sessions();
 
-        if external_session.is_none() {
-            // Flush the internally-created policy session.
-            if let AuthSession::PolicySession(ps) = ek_session {
-                flush_policy_session(&mut ctx, ps)?;
-            }
+        if !external_session && let AuthSession::PolicySession(ps) = ek_session {
+            flush_policy_session(&mut ctx, ps)?;
         }
-
-        // Write decrypted secret.
         std::fs::write(&self.certinfo_data, cert_info.as_bytes())
             .with_context(|| format!("writing certinfo to {}", self.certinfo_data.display()))?;
         info!("certinfo saved to {}", self.certinfo_data.display());
 
         Ok(())
-    }
-
-    /// If `-P` starts with `session:`, return the file path portion.
-    fn is_external_session(&self) -> Option<&str> {
-        self.credential_key_auth
-            .as_deref()
-            .and_then(|v| v.strip_prefix("session:"))
     }
 }
 

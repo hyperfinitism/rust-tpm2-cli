@@ -17,13 +17,9 @@ use crate::session::load_session_from_file;
 const DECRYPT_BIT: TPMA_SESSION = 1 << 5;
 const ENCRYPT_BIT: TPMA_SESSION = 1 << 6;
 const AUDIT_BIT: TPMA_SESSION = 1 << 7;
-
-/// Configure session attributes (encrypt, decrypt, audit, etc.).
-///
-/// Modifies the session attributes and saves the session back.
 #[derive(Parser)]
 pub struct SessionConfigCmd {
-    /// Session context file
+    /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
     pub session: PathBuf,
 
@@ -54,22 +50,16 @@ pub struct SessionConfigCmd {
 
 impl SessionConfigCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
-
-        // Load the session.
+        let mut ctx = create_context(global.tcti.as_ref())?;
         let session = load_session_from_file(&mut ctx, &self.session, SessionType::Hmac)?;
 
         let session_handle: SessionHandle = session.into();
-
-        // Get current attributes as raw TPMA_SESSION.
         let current_attrs = ctx
             .tr_sess_get_attributes(session)
             .context("failed to get session attributes")?;
         let mut raw: TPMA_SESSION = current_attrs
             .try_into()
             .map_err(|e| anyhow::anyhow!("invalid session attributes: {e:?}"))?;
-
-        // Modify based on flags using named bit constants.
         if self.enable_encrypt {
             raw |= ENCRYPT_BIT;
         }
@@ -99,8 +89,6 @@ impl SessionConfigCmd {
             .context("failed to set session attributes")?;
 
         info!("session attributes updated");
-
-        // Save back.
         let obj_handle: ObjectHandle = session_handle.into();
         crate::session::save_session_and_forget(ctx, obj_handle, &self.session)?;
 

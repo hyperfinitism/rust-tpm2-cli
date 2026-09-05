@@ -12,19 +12,17 @@ use tss_esapi::structures::MaxNvBuffer;
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::resolve_nv_auth;
-use crate::parse::parse_hex_u32;
+use crate::parse::{self, NvAuthEntity, parse_nv_index};
 use crate::session::execute_with_optional_session;
-
-/// Write data to an NV index.
 #[derive(Parser)]
 pub struct NvWriteCmd {
     /// NV index handle (hex, e.g. 0x01400001)
-    #[arg(value_parser = parse_hex_u32)]
-    pub nv_index: u32,
+    #[arg(value_parser = parse_nv_index)]
+    pub nv_index: NvIndexTpmHandle,
 
-    /// Authorization hierarchy (o/owner, p/platform)
-    #[arg(short = 'C', long = "hierarchy", default_value = "o")]
-    pub hierarchy: String,
+    /// Authorization entity for the NV index (owner, platform, or nv-index)
+    #[arg(short = 'C', long = "hierarchy", default_value = "o", value_parser = parse::parse_nv_auth_entity)]
+    pub hierarchy: NvAuthEntity,
 
     /// Input file (default: stdin)
     #[arg(short = 'i', long = "input")]
@@ -41,11 +39,10 @@ pub struct NvWriteCmd {
 
 impl NvWriteCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
-        let nv_handle = NvIndexTpmHandle::new(self.nv_index)
-            .map_err(|e| anyhow::anyhow!("invalid NV index handle: {e}"))?;
-        let nv_auth = resolve_nv_auth(&mut ctx, &self.hierarchy, nv_handle)?;
+        let nv_handle = self.nv_index;
+        let nv_auth = resolve_nv_auth(&mut ctx, self.hierarchy, nv_handle)?;
 
         let data = read_input(&self.input)?;
         let buffer =
@@ -62,7 +59,10 @@ impl NvWriteCmd {
         })
         .context("TPM2_NV_Write failed")?;
 
-        info!("data written to NV index 0x{:08x}", self.nv_index);
+        info!(
+            "data written to NV index 0x{:08x}",
+            u32::from(self.nv_index)
+        );
         Ok(())
     }
 }

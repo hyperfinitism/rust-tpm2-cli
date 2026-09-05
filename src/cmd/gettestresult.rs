@@ -5,17 +5,12 @@ use clap::Parser;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
-
-/// Get the results of a TPM self test.
-///
-/// Wraps TPM2_GetTestResult: returns the test result data and the
-/// overall pass/fail status.
 #[derive(Parser)]
 pub struct GetTestResultCmd {}
 
 impl GetTestResultCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let (data, result) = ctx
             .execute_without_session(|ctx| ctx.get_test_result())

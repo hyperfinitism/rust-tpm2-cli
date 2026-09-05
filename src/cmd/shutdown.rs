@@ -6,8 +6,6 @@ use log::info;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
-
-/// Send TPM2_Shutdown command.
 #[derive(Parser)]
 pub struct ShutdownCmd {
     /// Send Shutdown(CLEAR) instead of Shutdown(STATE)
@@ -17,7 +15,7 @@ pub struct ShutdownCmd {
 
 impl ShutdownCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let shutdown_type = if self.clear {
             tss_esapi::constants::StartupType::Clear

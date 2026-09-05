@@ -11,10 +11,6 @@ use tss_esapi::handles::{ObjectHandle, SessionHandle};
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::session::load_session_from_file;
-
-/// Enable binding a policy to the plaintext password of the authorized entity.
-///
-/// Wraps TPM2_PolicyPassword.
 #[derive(Parser)]
 pub struct PolicyPasswordCmd {
     /// Policy session file
@@ -28,7 +24,7 @@ pub struct PolicyPasswordCmd {
 
 impl PolicyPasswordCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let session = load_session_from_file(&mut ctx, &self.session, SessionType::Policy)?;
         let policy_session = session

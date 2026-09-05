@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use log::info;
 
 use tss_esapi::structures::Auth;
@@ -13,30 +13,31 @@ use crate::context::create_context;
 use crate::handle::{ContextSource, load_object_from_source};
 use crate::parse::{self, parse_context_source};
 use crate::session::execute_with_optional_session;
-
-/// Change the authorization value of a TPM object or hierarchy.
-///
-/// For hierarchies: wraps TPM2_HierarchyChangeAuth.
-/// For loaded objects: wraps TPM2_ObjectChangeAuth.
 #[derive(Parser)]
+#[command(group(
+    ArgGroup::new("target")
+        .required(true)
+        .multiple(false)
+        .args(["object_context", "object_context_hierarchy"])
+))]
 pub struct ChangeAuthCmd {
     /// Object context (file:<path> or hex:<handle>)
-    #[arg(short = 'c', long = "object-context", value_parser = parse_context_source, conflicts_with = "object_context_hierarchy")]
+    #[arg(short = 'c', long = "object-context", value_parser = parse_context_source, requires = "parent_context")]
     pub object_context: Option<ContextSource>,
 
     /// Hierarchy shorthand (o/owner, p/platform, e/endorsement, l/lockout)
-    #[arg(long = "object-hierarchy", value_parser = parse::parse_auth_handle, conflicts_with = "object_context")]
+    #[arg(long = "object-hierarchy", value_parser = parse::parse_auth_handle)]
     pub object_context_hierarchy: Option<tss_esapi::handles::AuthHandle>,
 
     /// Parent object context (file:<path> or hex:<handle>)
-    #[arg(short = 'C', long = "parent-context", value_parser = parse_context_source)]
+    #[arg(short = 'C', long = "parent-context", value_parser = parse_context_source, requires = "object_context")]
     pub parent_context: Option<ContextSource>,
 
-    /// Current auth value for the object/hierarchy
+    /// Current authorization value for the object/hierarchy
     #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
 
-    /// New auth value
+    /// New authorization value
     #[arg(short = 'r', long = "new-auth", value_parser = parse::parse_auth)]
     pub new_auth: Auth,
 
@@ -51,7 +52,7 @@ pub struct ChangeAuthCmd {
 
 impl ChangeAuthCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         if let Some(auth_handle) = self.object_context_hierarchy {
             if let Some(ref auth) = self.auth {
@@ -67,13 +68,15 @@ impl ChangeAuthCmd {
 
             info!("hierarchy auth changed");
         } else {
-            let object_src = self.object_context.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("--object-context or --object-hierarchy is required")
-            })?;
+            let object_src = self
+                .object_context
+                .as_ref()
+                .expect("clap requires exactly one target");
             let object_handle = load_object_from_source(&mut ctx, object_src)?;
-            let parent_src = self.parent_context.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("-C/--parent-context is required for loaded objects")
-            })?;
+            let parent_src = self
+                .parent_context
+                .as_ref()
+                .expect("clap requires a parent for an object target");
             let parent_handle = load_object_from_source(&mut ctx, parent_src)?;
 
             if let Some(ref auth) = self.auth {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use log::info;
 use tss_esapi::tss2_esys::*;
 
@@ -9,13 +9,15 @@ use tss_esapi::structures::Auth;
 use crate::cli::GlobalOpts;
 use crate::parse;
 use crate::raw_esys::RawEsysContext;
-
-/// Reset the dictionary attack lockout or configure DA parameters.
-///
-/// Wraps TPM2_DictionaryAttackLockReset and TPM2_DictionaryAttackParameters (raw FFI).
 #[derive(Parser)]
+#[command(group(
+    ArgGroup::new("action")
+        .required(true)
+        .multiple(false)
+        .args(["clear_lockout", "setup_parameters"])
+))]
 pub struct DictionaryLockoutCmd {
-    /// Auth value for the lockout hierarchy
+    /// Authorization value for the lockout hierarchy
     #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
 
@@ -24,16 +26,16 @@ pub struct DictionaryLockoutCmd {
     pub clear_lockout: bool,
 
     /// Max number of authorization failures before lockout
-    #[arg(long = "max-tries")]
-    pub max_tries: Option<u32>,
+    #[arg(long = "max-tries", default_value = "32")]
+    pub max_tries: u32,
 
     /// Lockout recovery time in seconds
-    #[arg(long = "recovery-time")]
-    pub recovery_time: Option<u32>,
+    #[arg(long = "recovery-time", default_value = "10")]
+    pub recovery_time: u32,
 
     /// Lockout auth failure recovery time in seconds
-    #[arg(long = "lockout-recovery-time")]
-    pub lockout_recovery_time: Option<u32>,
+    #[arg(long = "lockout-recovery-time", default_value = "10")]
+    pub lockout_recovery_time: u32,
 
     /// Setup mode: configure DA parameters (requires --max-tries, --recovery-time, --lockout-recovery-time)
     #[arg(short = 's', long = "setup-parameters")]
@@ -42,13 +44,14 @@ pub struct DictionaryLockoutCmd {
 
 impl DictionaryLockoutCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
+        let mut raw = RawEsysContext::new(global.tcti.as_ref())?;
 
         if let Some(ref auth) = self.auth {
             raw.set_auth(ESYS_TR_RH_LOCKOUT, auth.as_bytes())?;
         }
 
         if self.clear_lockout {
+            // Raw ESYS fallback: rust-tss-esapi does not expose TPM2_DictionaryAttackLockReset.
             unsafe {
                 let rc = Esys_DictionaryAttackLockReset(
                     raw.ptr(),
@@ -65,10 +68,11 @@ impl DictionaryLockoutCmd {
         }
 
         if self.setup_parameters {
-            let max_tries = self.max_tries.unwrap_or(32);
-            let recovery_time = self.recovery_time.unwrap_or(10);
-            let lockout_recovery = self.lockout_recovery_time.unwrap_or(10);
+            let max_tries = self.max_tries;
+            let recovery_time = self.recovery_time;
+            let lockout_recovery = self.lockout_recovery_time;
 
+            // Raw ESYS fallback: rust-tss-esapi does not expose TPM2_DictionaryAttackParameters.
             unsafe {
                 let rc = Esys_DictionaryAttackParameters(
                     raw.ptr(),

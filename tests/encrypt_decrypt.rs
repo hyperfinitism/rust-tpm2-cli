@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Encrypt/decrypt tests: rsaencrypt, rsadecrypt, encrypt, decrypt.
+//! Encrypt/decrypt tests: rsaencrypt, rsadecrypt, and encryptdecrypt2.
 
 mod common;
 
@@ -51,29 +51,32 @@ fn rsadecrypt_on_restricted_key_fails() {
 }
 
 #[test]
-fn encrypt_without_valid_symmetric_key_fails() {
+fn encryptdecrypt2_without_valid_symmetric_key_fails() {
     let s = SwtpmSession::new();
     let primary = s.create_primary_rsa("primary");
-    s.cmd("encrypt")
+    let input = s.write_tmp_file("symmetric-input.bin", b"test");
+    s.cmd("encryptdecrypt2")
         .arg("-c")
         .arg(SwtpmSession::file_ref(&primary))
         .arg("-o")
         .arg(s.tmp().path().join("enc_out.bin"))
-        .write_stdin("test")
+        .arg(input)
         .assert()
         .failure();
 }
 
 #[test]
-fn decrypt_without_valid_symmetric_key_fails() {
+fn encryptdecrypt2_decrypt_without_valid_symmetric_key_fails() {
     let s = SwtpmSession::new();
     let primary = s.create_primary_rsa("primary");
-    s.cmd("decrypt")
+    let input = s.write_tmp_file("symmetric-ciphertext.bin", b"test");
+    s.cmd("encryptdecrypt2")
         .arg("-c")
         .arg(SwtpmSession::file_ref(&primary))
+        .arg("--decrypt")
         .arg("-o")
         .arg(s.tmp().path().join("dec_out.bin"))
-        .write_stdin("test")
+        .arg(input)
         .assert()
         .failure();
 }

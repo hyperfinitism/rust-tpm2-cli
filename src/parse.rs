@@ -10,25 +10,30 @@
 //! [`String`] or [`Tpm2Error`], making them directly usable as clap
 //! `value_parser` callbacks.
 
+use std::fmt;
 use std::path::PathBuf;
 
-use tss_esapi::attributes::NvIndexAttributesBuilder;
-use tss_esapi::handles::AuthHandle;
-use tss_esapi::interface_types::algorithm::{HashingAlgorithm, SymmetricMode};
+use tss_esapi::attributes::{LocalityAttributes, NvIndexAttributesBuilder};
+use tss_esapi::constants::{ClockAdjust, CommandCode};
+use tss_esapi::handles::{AuthHandle, NvIndexTpmHandle, PcrHandle, PersistentTpmHandle};
+use tss_esapi::interface_types::ArithmeticComparison;
+use tss_esapi::interface_types::algorithm::{
+    EccKeyExchangeAlgorithm, HashingAlgorithm, SymmetricMode,
+};
 use tss_esapi::interface_types::ecc::EccCurve;
-use tss_esapi::interface_types::key_bits::{AesKeyBits, CamelliaKeyBits, Sm4KeyBits};
-use tss_esapi::interface_types::reserved_handles::{Hierarchy, HierarchyAuth, Provision};
+use tss_esapi::interface_types::key_bits::{AesKeyBits, CamelliaKeyBits, RsaKeyBits, Sm4KeyBits};
+use tss_esapi::interface_types::reserved_handles::{Enables, Hierarchy, HierarchyAuth, Provision};
 use tss_esapi::structures::{
-    Auth, Data, HashScheme, PcrSelectionList, PcrSelectionListBuilder, PcrSlot, SensitiveData,
-    SignatureScheme, SymmetricDefinition,
+    Auth, CommandCodeList, Data, Digest, DigestValues, HashScheme, Name, Nonce, PcrSelectSize,
+    PcrSelectionList, PcrSelectionListBuilder, PcrSlot, PublicKeyedHashParameters,
+    PublicParameters, PublicRsaParameters, RsaDecryptionScheme, RsaExponent, RsaScheme,
+    SensitiveData, SignatureScheme, SymmetricCipherParameters, SymmetricDefinition,
+    SymmetricDefinitionObject, Timeout,
 };
 
 use crate::error::Tpm2Error;
 use crate::handle::ContextSource;
-
-// ---------------------------------------------------------------------------
-// Hex
-// ---------------------------------------------------------------------------
+use crate::tcti::TctiConfig;
 
 /// Parse a hex `u32` value, accepting an optional `0x` prefix.
 ///
@@ -46,9 +51,49 @@ pub fn parse_hex_u32(s: &str) -> Result<u32, String> {
         .map_err(|_| format!("expected a hex value (e.g. 0x01400001), got: '{s}'"))
 }
 
-// ---------------------------------------------------------------------------
-// Duration
-// ---------------------------------------------------------------------------
+/// Parse a hex `u64` value, accepting an optional `0x` prefix.
+pub fn parse_hex_u64(s: &str) -> Result<u64, String> {
+    let digits = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .unwrap_or(s);
+    u64::from_str_radix(digits, 16)
+        .map_err(|_| format!("expected a hex value (e.g. 0x01), got: '{s}'"))
+}
+
+/// Parse and validate an NV index TPM handle.
+pub fn parse_nv_index(s: &str) -> Result<NvIndexTpmHandle, String> {
+    let handle = parse_hex_u32(s)?;
+    NvIndexTpmHandle::new(handle)
+        .map_err(|e| format!("invalid NV index handle 0x{handle:08x}: {e}"))
+}
+
+/// Parse and validate a persistent object TPM handle.
+pub fn parse_persistent_handle(s: &str) -> Result<PersistentTpmHandle, String> {
+    let handle = parse_hex_u32(s)?;
+    PersistentTpmHandle::new(handle)
+        .map_err(|e| format!("invalid persistent handle 0x{handle:08x}: {e}"))
+}
+
+/// Parse and validate a TPM handle.
+pub fn parse_tpm_handle(s: &str) -> Result<tss_esapi::handles::TpmHandle, String> {
+    let handle = parse_hex_u32(s)?;
+    tss_esapi::handles::TpmHandle::try_from(handle)
+        .map_err(|e| format!("invalid TPM handle 0x{handle:08x}: {e}"))
+}
+
+/// Parse an RSA key size supported by the TPM public-area type.
+pub fn parse_rsa_key_bits(s: &str) -> Result<RsaKeyBits, String> {
+    match s {
+        "1024" => Ok(RsaKeyBits::Rsa1024),
+        "2048" => Ok(RsaKeyBits::Rsa2048),
+        "3072" => Ok(RsaKeyBits::Rsa3072),
+        "4096" => Ok(RsaKeyBits::Rsa4096),
+        _ => Err(format!(
+            "unsupported RSA key size: {s}; use 1024, 2048, 3072, or 4096"
+        )),
+    }
+}
 
 pub fn parse_duration(s: &str) -> Result<Option<std::time::Duration>, String> {
     let secs: u64 = s
@@ -61,9 +106,9 @@ pub fn parse_duration(s: &str) -> Result<Option<std::time::Duration>, String> {
     Ok(duration)
 }
 
-// ---------------------------------------------------------------------------
-// Context source
-// ---------------------------------------------------------------------------
+pub fn parse_tcti_config(s: &str) -> Result<TctiConfig, Tpm2Error> {
+    s.parse()
+}
 
 /// Parse a context source string into a [`ContextSource`].
 ///
@@ -86,6 +131,8 @@ pub fn parse_context_source(s: &str) -> Result<ContextSource, String> {
             .unwrap_or(hex_str);
         let handle = u32::from_str_radix(digits, 16)
             .map_err(|_| format!("invalid hex handle: '{hex_str}'"))?;
+        let handle = tss_esapi::handles::TpmHandle::try_from(handle)
+            .map_err(|e| format!("invalid TPM handle 0x{handle:08x}: {e}"))?;
         Ok(ContextSource::Handle(handle))
     } else {
         Err(format!(
@@ -93,10 +140,6 @@ pub fn parse_context_source(s: &str) -> Result<ContextSource, String> {
         ))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Hashing algorithm
-// ---------------------------------------------------------------------------
 
 /// Parse a hashing algorithm name.
 ///
@@ -115,36 +158,61 @@ pub fn parse_hashing_algorithm(s: &str) -> Result<HashingAlgorithm, String> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Signature scheme
-// ---------------------------------------------------------------------------
-
-/// Parse a signature scheme name together with the hashing algorithm it uses.
-///
-/// This function takes two parameters and therefore cannot be used as a clap
-/// `value_parser` directly.  The `hash_alg` parameter should be parsed at CLI
-/// time via [`parse_hashing_algorithm`], and this function should be called at
-/// execution time to combine them.
-pub fn parse_signature_scheme(
-    s: &str,
-    hash_alg: HashingAlgorithm,
-) -> Result<SignatureScheme, String> {
-    let hs = HashScheme::new(hash_alg);
-    match s.to_lowercase().as_str() {
-        "rsassa" => Ok(SignatureScheme::RsaSsa { scheme: hs }),
-        "rsapss" => Ok(SignatureScheme::RsaPss { scheme: hs }),
-        "ecdsa" => Ok(SignatureScheme::EcDsa { scheme: hs }),
-        "sm2" => Ok(SignatureScheme::Sm2 { scheme: hs }),
-        "ecschnorr" => Ok(SignatureScheme::EcSchnorr { scheme: hs }),
-        "hmac" => Ok(SignatureScheme::Hmac { scheme: hs.into() }),
-        "null" => Ok(SignatureScheme::Null),
-        _ => Err(format!("unsupported signature scheme: {s}")),
+/// Parse a TPM clock-rate adjustment.
+pub fn parse_clock_adjust(s: &str) -> Result<ClockAdjust, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "slower" => Ok(ClockAdjust::CoarseSlower),
+        "slow" => Ok(ClockAdjust::FineSlower),
+        "medium" | "none" => Ok(ClockAdjust::NoChange),
+        "fast" => Ok(ClockAdjust::FineFaster),
+        "faster" => Ok(ClockAdjust::CoarseFaster),
+        _ => Err(format!(
+            "invalid rate: {s}; expected slower/slow/medium/fast/faster"
+        )),
     }
 }
 
-// ---------------------------------------------------------------------------
-// Hierarchy / Provision / AuthHandle
-// ---------------------------------------------------------------------------
+/// The hash-independent part of a TPM signature scheme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignatureSchemeKind {
+    RsaSsa,
+    RsaPss,
+    EcDsa,
+    Sm2,
+    EcSchnorr,
+    Hmac,
+    Null,
+}
+
+impl SignatureSchemeKind {
+    /// Combine a parsed scheme kind with its separately parsed hash algorithm.
+    pub fn with_hash(self, hash_alg: HashingAlgorithm) -> SignatureScheme {
+        let hs = HashScheme::new(hash_alg);
+        match self {
+            Self::RsaSsa => SignatureScheme::RsaSsa { scheme: hs },
+            Self::RsaPss => SignatureScheme::RsaPss { scheme: hs },
+            Self::EcDsa => SignatureScheme::EcDsa { scheme: hs },
+            Self::Sm2 => SignatureScheme::Sm2 { scheme: hs },
+            Self::EcSchnorr => SignatureScheme::EcSchnorr { scheme: hs },
+            Self::Hmac => SignatureScheme::Hmac { scheme: hs.into() },
+            Self::Null => SignatureScheme::Null,
+        }
+    }
+}
+
+/// Parse the hash-independent part of a signature scheme.
+pub fn parse_signature_scheme_kind(s: &str) -> Result<SignatureSchemeKind, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "rsassa" => Ok(SignatureSchemeKind::RsaSsa),
+        "rsapss" => Ok(SignatureSchemeKind::RsaPss),
+        "ecdsa" => Ok(SignatureSchemeKind::EcDsa),
+        "sm2" => Ok(SignatureSchemeKind::Sm2),
+        "ecschnorr" => Ok(SignatureSchemeKind::EcSchnorr),
+        "hmac" => Ok(SignatureSchemeKind::Hmac),
+        "null" => Ok(SignatureSchemeKind::Null),
+        _ => Err(format!("unsupported signature scheme: {s}")),
+    }
+}
 
 /// Parse a hierarchy/auth-handle specification.
 ///
@@ -181,9 +249,70 @@ pub fn parse_auth_handle(value: &str) -> Result<AuthHandle, Tpm2Error> {
     match value.to_lowercase().as_str() {
         "o" | "owner" => Ok(AuthHandle::Owner),
         "p" | "platform" => Ok(AuthHandle::Platform),
+        "e" | "endorsement" => Ok(AuthHandle::Endorsement),
         "l" | "lockout" => Ok(AuthHandle::Lockout),
         _ => Err(Tpm2Error::InvalidHandle(format!(
             "unknown auth handle: {value}"
+        ))),
+    }
+}
+
+/// Parse an authorization handle restricted to owner or platform.
+pub fn parse_owner_or_platform_auth_handle(value: &str) -> Result<AuthHandle, Tpm2Error> {
+    match value.to_lowercase().as_str() {
+        "o" | "owner" => Ok(AuthHandle::Owner),
+        "p" | "platform" => Ok(AuthHandle::Platform),
+        _ => Err(Tpm2Error::InvalidHandle(format!(
+            "authorization handle must be owner or platform, got: {value}"
+        ))),
+    }
+}
+
+/// Parse an authorization handle restricted to platform or lockout.
+pub fn parse_platform_or_lockout_auth_handle(value: &str) -> Result<AuthHandle, Tpm2Error> {
+    match value.to_lowercase().as_str() {
+        "p" | "platform" => Ok(AuthHandle::Platform),
+        "l" | "lockout" => Ok(AuthHandle::Lockout),
+        _ => Err(Tpm2Error::InvalidHandle(format!(
+            "authorization handle must be platform or lockout, got: {value}"
+        ))),
+    }
+}
+
+/// Parse an authorization handle restricted to endorsement or platform.
+pub fn parse_endorsement_or_platform_auth_handle(value: &str) -> Result<AuthHandle, Tpm2Error> {
+    match value.to_lowercase().as_str() {
+        "e" | "endorsement" => Ok(AuthHandle::Endorsement),
+        "p" | "platform" => Ok(AuthHandle::Platform),
+        _ => Err(Tpm2Error::InvalidHandle(format!(
+            "authorization handle must be endorsement or platform, got: {value}"
+        ))),
+    }
+}
+
+/// Parse a hierarchy authorization handle.
+pub fn parse_hierarchy_auth(value: &str) -> Result<HierarchyAuth, Tpm2Error> {
+    match value.to_lowercase().as_str() {
+        "o" | "owner" => Ok(HierarchyAuth::Owner),
+        "p" | "platform" => Ok(HierarchyAuth::Platform),
+        "e" | "endorsement" => Ok(HierarchyAuth::Endorsement),
+        "l" | "lockout" => Ok(HierarchyAuth::Lockout),
+        _ => Err(Tpm2Error::InvalidHandle(format!(
+            "unknown hierarchy authorization handle: {value}"
+        ))),
+    }
+}
+
+/// Parse a hierarchy selector for TPM2_HierarchyControl.
+pub fn parse_enables(value: &str) -> Result<Enables, Tpm2Error> {
+    match value.to_lowercase().as_str() {
+        "o" | "owner" => Ok(Enables::Owner),
+        "p" | "platform" => Ok(Enables::Platform),
+        "e" | "endorsement" => Ok(Enables::Endorsement),
+        "n" | "null" => Ok(Enables::Null),
+        "pn" | "platform-nv" | "platform_nv" => Ok(Enables::PlatformNv),
+        _ => Err(Tpm2Error::InvalidHandle(format!(
+            "unknown hierarchy selector: {value}"
         ))),
     }
 }
@@ -193,45 +322,6 @@ pub fn provision_to_hierarchy_auth(provision: Provision) -> HierarchyAuth {
     match provision {
         Provision::Owner => HierarchyAuth::Owner,
         Provision::Platform => HierarchyAuth::Platform,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Raw ESYS_TR hierarchy (for raw FFI commands)
-// ---------------------------------------------------------------------------
-
-/// Parse a hierarchy specification into a raw `ESYS_TR` handle.
-///
-/// Accepted values: `o`/`owner`, `p`/`platform`, `e`/`endorsement`,
-/// `n`/`null`, `l`/`lockout`.
-///
-/// Intended for use as a clap `value_parser` in commands that call raw
-/// ESYS FFI functions.
-pub fn parse_esys_hierarchy(value: &str) -> Result<u32, Tpm2Error> {
-    use tss_esapi::tss2_esys::*;
-    match value.to_lowercase().as_str() {
-        "o" | "owner" => Ok(ESYS_TR_RH_OWNER),
-        "p" | "platform" => Ok(ESYS_TR_RH_PLATFORM),
-        "e" | "endorsement" => Ok(ESYS_TR_RH_ENDORSEMENT),
-        "n" | "null" => Ok(ESYS_TR_RH_NULL),
-        "l" | "lockout" => Ok(ESYS_TR_RH_LOCKOUT),
-        _ => Err(Tpm2Error::InvalidHandle(format!(
-            "unknown hierarchy: {value}"
-        ))),
-    }
-}
-
-/// Parse a hierarchy specification into a raw TPM2_RH handle constant.
-pub fn parse_tpm2_rh_hierarchy(value: &str) -> Result<u32, Tpm2Error> {
-    use tss_esapi::constants::tss::*;
-    match value.to_lowercase().as_str() {
-        "o" | "owner" => Ok(TPM2_RH_OWNER),
-        "p" | "platform" => Ok(TPM2_RH_PLATFORM),
-        "e" | "endorsement" => Ok(TPM2_RH_ENDORSEMENT),
-        "n" | "null" => Ok(TPM2_RH_NULL),
-        _ => Err(Tpm2Error::InvalidHandle(format!(
-            "unknown hierarchy: {value}"
-        ))),
     }
 }
 
@@ -249,19 +339,17 @@ pub enum NvAuthEntity {
 
 /// Parse an NV authorization entity.
 ///
-/// Accepted values: `o`/`owner`, `p`/`platform`, or anything else
-/// falls back to [`NvAuthEntity::NvIndex`].
+/// Accepted values: `o`/`owner`, `p`/`platform`, or `nv`/`index`.
 pub fn parse_nv_auth_entity(value: &str) -> Result<NvAuthEntity, String> {
-    match value.to_lowercase().as_str() {
+    match value.to_ascii_lowercase().as_str() {
         "o" | "owner" => Ok(NvAuthEntity::Owner),
         "p" | "platform" => Ok(NvAuthEntity::Platform),
-        _ => Ok(NvAuthEntity::NvIndex),
+        "nv" | "index" => Ok(NvAuthEntity::NvIndex),
+        _ => Err(format!(
+            "unknown NV authorization entity: {value}; expected owner/platform/nv"
+        )),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Authorization value
-// ---------------------------------------------------------------------------
 
 /// Parse an authorization value from a CLI string.
 ///
@@ -282,9 +370,26 @@ pub fn parse_auth(value: &str) -> Result<Auth, Tpm2Error> {
     Auth::try_from(bytes).map_err(|e| Tpm2Error::InvalidAuth(e.to_string()))
 }
 
-// ---------------------------------------------------------------------------
-// NV attributes
-// ---------------------------------------------------------------------------
+/// Authorization for an EK credential key: either an external policy session
+/// or an endorsement-hierarchy authorization value.
+#[derive(Debug, Clone)]
+pub enum CredentialKeyAuth {
+    Session(PathBuf),
+    Auth(Auth),
+}
+
+pub fn parse_credential_key_auth(value: &str) -> Result<CredentialKeyAuth, Tpm2Error> {
+    if let Some(path) = value.strip_prefix("session:") {
+        if path.is_empty() {
+            return Err(Tpm2Error::InvalidAuth(
+                "session path must not be empty".to_owned(),
+            ));
+        }
+        Ok(CredentialKeyAuth::Session(PathBuf::from(path)))
+    } else {
+        parse_auth(value).map(CredentialKeyAuth::Auth)
+    }
+}
 
 /// Parse symbolic NV index attributes separated by `|`.
 ///
@@ -337,10 +442,6 @@ pub fn parse_nv_attributes(s: &str) -> Result<tss_esapi::attributes::NvIndexAttr
             "written" => builder.with_written(true),               // 29
             "platformcreate" | "platform_create" => builder.with_platform_create(true), // 30
             "read_stclear" => builder.with_read_stclear(true),     // 31
-            // rust-tss-esapi v8.0.0-alpha.2 does not support the following fields:
-            // 32: TPMA_EXTERNAL_NV_ENCRYPTION
-            // 33: TPMA_EXTERNAL_NV_INTEGRITY
-            // 34: TPMA_EXTERNAL_NV_ANTIROLLBACK
             _ => return Err(format!("unknown NV attribute: {attr}")),
         };
     }
@@ -350,15 +451,310 @@ pub fn parse_nv_attributes(s: &str) -> Result<tss_esapi::attributes::NvIndexAttr
         .map_err(|e| format!("failed to build NV attributes: {e}"))
 }
 
-// ---------------------------------------------------------------------------
-// PCR selection
-// ---------------------------------------------------------------------------
+/// Asymmetric key algorithm accepted by EK/AK/primary-key commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AsymmetricAlgorithm {
+    Rsa,
+    Ecc,
+}
+
+impl AsymmetricAlgorithm {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rsa => "rsa",
+            Self::Ecc => "ecc",
+        }
+    }
+}
+
+impl fmt::Display for AsymmetricAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+pub fn parse_asymmetric_algorithm(s: &str) -> Result<AsymmetricAlgorithm, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "rsa" => Ok(AsymmetricAlgorithm::Rsa),
+        "ecc" => Ok(AsymmetricAlgorithm::Ecc),
+        _ => Err(format!(
+            "unsupported asymmetric algorithm: {s}; expected rsa/ecc"
+        )),
+    }
+}
+
+/// Child-object algorithms accepted by `create`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreateAlgorithm {
+    Rsa,
+    Ecc,
+    Hmac,
+    KeyedHash,
+}
+
+pub fn parse_create_algorithm(s: &str) -> Result<CreateAlgorithm, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "rsa" => Ok(CreateAlgorithm::Rsa),
+        "ecc" => Ok(CreateAlgorithm::Ecc),
+        "hmac" => Ok(CreateAlgorithm::Hmac),
+        "keyedhash" => Ok(CreateAlgorithm::KeyedHash),
+        _ => Err(format!(
+            "unsupported key algorithm: {s}; expected rsa/ecc/hmac/keyedhash"
+        )),
+    }
+}
+
+/// Hash-independent RSA encryption/decryption scheme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RsaDecryptionSchemeKind {
+    RsaEs,
+    Oaep,
+    Null,
+}
+
+impl RsaDecryptionSchemeKind {
+    pub fn with_hash(self, hash_alg: HashingAlgorithm) -> RsaDecryptionScheme {
+        match self {
+            Self::RsaEs => RsaDecryptionScheme::RsaEs,
+            Self::Oaep => RsaDecryptionScheme::Oaep(HashScheme::new(hash_alg)),
+            Self::Null => RsaDecryptionScheme::Null,
+        }
+    }
+}
+
+pub fn parse_rsa_decryption_scheme_kind(s: &str) -> Result<RsaDecryptionSchemeKind, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "rsaes" => Ok(RsaDecryptionSchemeKind::RsaEs),
+        "oaep" => Ok(RsaDecryptionSchemeKind::Oaep),
+        "null" => Ok(RsaDecryptionSchemeKind::Null),
+        _ => Err(format!(
+            "unsupported RSA scheme: {s}; expected rsaes/oaep/null"
+        )),
+    }
+}
+
+/// Parse the inner-wrapper algorithm used by Duplicate and Import.
+pub fn parse_wrapper_algorithm(s: &str) -> Result<SymmetricDefinitionObject, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "null" => Ok(SymmetricDefinitionObject::Null),
+        "aes128cfb" | "aes" => Ok(SymmetricDefinitionObject::Aes {
+            key_bits: AesKeyBits::Aes128,
+            mode: SymmetricMode::Cfb,
+        }),
+        "aes256cfb" => Ok(SymmetricDefinitionObject::Aes {
+            key_bits: AesKeyBits::Aes256,
+            mode: SymmetricMode::Cfb,
+        }),
+        _ => Err(format!(
+            "unsupported wrapper algorithm: {s}; expected null/aes128cfb/aes256cfb"
+        )),
+    }
+}
+
+/// Parse an ECC two-phase key-exchange scheme.
+pub fn parse_ecc_key_exchange_algorithm(s: &str) -> Result<EccKeyExchangeAlgorithm, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "ecdh" => Ok(EccKeyExchangeAlgorithm::EcDh),
+        "sm2" => Ok(EccKeyExchangeAlgorithm::Sm2),
+        _ => Err(format!(
+            "unsupported key exchange scheme: {s}; expected ecdh/sm2"
+        )),
+    }
+}
+
+/// Capability query names accepted by `getcap`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityQuery {
+    Algorithms,
+    Commands,
+    Pcrs,
+    PropertiesFixed,
+    PropertiesVariable,
+    EccCurves,
+    HandlesTransient,
+    HandlesPersistent,
+    HandlesPermanent,
+    HandlesPcr,
+    HandlesNvIndex,
+    HandlesLoadedSession,
+    HandlesSavedSession,
+}
+
+pub fn parse_capability_query(s: &str) -> Result<CapabilityQuery, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "algorithms" => Ok(CapabilityQuery::Algorithms),
+        "commands" => Ok(CapabilityQuery::Commands),
+        "pcrs" => Ok(CapabilityQuery::Pcrs),
+        "properties-fixed" => Ok(CapabilityQuery::PropertiesFixed),
+        "properties-variable" => Ok(CapabilityQuery::PropertiesVariable),
+        "ecc-curves" => Ok(CapabilityQuery::EccCurves),
+        "handles-transient" => Ok(CapabilityQuery::HandlesTransient),
+        "handles-persistent" => Ok(CapabilityQuery::HandlesPersistent),
+        "handles-permanent" => Ok(CapabilityQuery::HandlesPermanent),
+        "handles-pcr" => Ok(CapabilityQuery::HandlesPcr),
+        "handles-nv-index" => Ok(CapabilityQuery::HandlesNvIndex),
+        "handles-loaded-session" => Ok(CapabilityQuery::HandlesLoadedSession),
+        "handles-saved-session" => Ok(CapabilityQuery::HandlesSavedSession),
+        _ => Err(format!(
+            "unknown capability '{s}'; use -l to list supported capabilities"
+        )),
+    }
+}
+
+/// Structure formats accepted by `print`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrintStructureType {
+    Attest,
+    Context,
+    PublicBuffer,
+    Public,
+}
+
+pub fn parse_print_structure_type(s: &str) -> Result<PrintStructureType, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "tpms_attest" => Ok(PrintStructureType::Attest),
+        "tpms_context" => Ok(PrintStructureType::Context),
+        "tpm2b_public" => Ok(PrintStructureType::PublicBuffer),
+        "tpmt_public" => Ok(PrintStructureType::Public),
+        _ => Err(format!(
+            "unsupported type: {s}; expected TPMS_ATTEST/TPMS_CONTEXT/TPM2B_PUBLIC/TPMT_PUBLIC"
+        )),
+    }
+}
+
+/// Raw TPM algorithm identifiers for IncrementalSelfTest.
+#[derive(Debug, Clone)]
+pub struct AlgorithmIdentifierList(Vec<u16>);
+
+impl AlgorithmIdentifierList {
+    pub fn as_slice(&self) -> &[u16] {
+        &self.0
+    }
+}
+
+pub fn parse_algorithm_identifier_list(s: &str) -> Result<AlgorithmIdentifierList, String> {
+    use tss_esapi::constants::tss::*;
+    use tss_esapi::tss2_esys::TPML_ALG;
+
+    let algorithms = s
+        .split(',')
+        .map(|alg| match alg.trim().to_ascii_lowercase().as_str() {
+            "sha1" | "sha" => Ok(TPM2_ALG_SHA1),
+            "sha256" => Ok(TPM2_ALG_SHA256),
+            "sha384" => Ok(TPM2_ALG_SHA384),
+            "sha512" => Ok(TPM2_ALG_SHA512),
+            "rsa" => Ok(TPM2_ALG_RSA),
+            "ecc" => Ok(TPM2_ALG_ECC),
+            "aes" => Ok(TPM2_ALG_AES),
+            "hmac" => Ok(TPM2_ALG_HMAC),
+            _ => Err(format!("unknown algorithm: {alg}")),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let maximum = TPML_ALG::default().algorithms.len();
+    if algorithms.len() > maximum {
+        return Err(format!(
+            "too many algorithms: {}; maximum is {maximum}",
+            algorithms.len()
+        ));
+    }
+    Ok(AlgorithmIdentifierList(algorithms))
+}
+
+/// Build the exact public-parameter set accepted by `testparms`.
+pub fn parse_public_parameters(s: &str) -> Result<PublicParameters, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "rsa" | "rsa2048" => Ok(PublicParameters::Rsa(PublicRsaParameters::new(
+            SymmetricDefinitionObject::Null,
+            RsaScheme::Null,
+            RsaKeyBits::Rsa2048,
+            RsaExponent::default(),
+        ))),
+        "rsa3072" => Ok(PublicParameters::Rsa(PublicRsaParameters::new(
+            SymmetricDefinitionObject::Null,
+            RsaScheme::Null,
+            RsaKeyBits::Rsa3072,
+            RsaExponent::default(),
+        ))),
+        "rsa4096" => Ok(PublicParameters::Rsa(PublicRsaParameters::new(
+            SymmetricDefinitionObject::Null,
+            RsaScheme::Null,
+            RsaKeyBits::Rsa4096,
+            RsaExponent::default(),
+        ))),
+        "keyedhash" | "hmac" | "xor" => Ok(PublicParameters::KeyedHash(
+            PublicKeyedHashParameters::new(tss_esapi::structures::KeyedHashScheme::HMAC_SHA_256),
+        )),
+        "aes" | "aes128" => Ok(PublicParameters::SymCipher(SymmetricCipherParameters::new(
+            SymmetricDefinitionObject::Aes {
+                key_bits: AesKeyBits::Aes128,
+                mode: SymmetricMode::Cfb,
+            },
+        ))),
+        "aes192" => Ok(PublicParameters::SymCipher(SymmetricCipherParameters::new(
+            SymmetricDefinitionObject::Aes {
+                key_bits: AesKeyBits::Aes192,
+                mode: SymmetricMode::Cfb,
+            },
+        ))),
+        "aes256" => Ok(PublicParameters::SymCipher(SymmetricCipherParameters::new(
+            SymmetricDefinitionObject::Aes {
+                key_bits: AesKeyBits::Aes256,
+                mode: SymmetricMode::Cfb,
+            },
+        ))),
+        _ => Err(format!("unsupported parameter set: {s}")),
+    }
+}
+
+/// Parse a PCR index in the range supported by TPM 2.0 PCR handles.
+pub fn parse_pcr_handle(s: &str) -> Result<PcrHandle, String> {
+    let index = s
+        .parse::<u8>()
+        .map_err(|_| format!("invalid PCR index: {s}"))?;
+
+    match index {
+        0 => Ok(PcrHandle::Pcr0),
+        1 => Ok(PcrHandle::Pcr1),
+        2 => Ok(PcrHandle::Pcr2),
+        3 => Ok(PcrHandle::Pcr3),
+        4 => Ok(PcrHandle::Pcr4),
+        5 => Ok(PcrHandle::Pcr5),
+        6 => Ok(PcrHandle::Pcr6),
+        7 => Ok(PcrHandle::Pcr7),
+        8 => Ok(PcrHandle::Pcr8),
+        9 => Ok(PcrHandle::Pcr9),
+        10 => Ok(PcrHandle::Pcr10),
+        11 => Ok(PcrHandle::Pcr11),
+        12 => Ok(PcrHandle::Pcr12),
+        13 => Ok(PcrHandle::Pcr13),
+        14 => Ok(PcrHandle::Pcr14),
+        15 => Ok(PcrHandle::Pcr15),
+        16 => Ok(PcrHandle::Pcr16),
+        17 => Ok(PcrHandle::Pcr17),
+        18 => Ok(PcrHandle::Pcr18),
+        19 => Ok(PcrHandle::Pcr19),
+        20 => Ok(PcrHandle::Pcr20),
+        21 => Ok(PcrHandle::Pcr21),
+        22 => Ok(PcrHandle::Pcr22),
+        23 => Ok(PcrHandle::Pcr23),
+        24 => Ok(PcrHandle::Pcr24),
+        25 => Ok(PcrHandle::Pcr25),
+        26 => Ok(PcrHandle::Pcr26),
+        27 => Ok(PcrHandle::Pcr27),
+        28 => Ok(PcrHandle::Pcr28),
+        29 => Ok(PcrHandle::Pcr29),
+        30 => Ok(PcrHandle::Pcr30),
+        31 => Ok(PcrHandle::Pcr31),
+        _ => Err(format!("PCR index out of range: {index}")),
+    }
+}
 
 /// Parse a PCR selection string like `sha256:0,1,2+sha1:all`.
 ///
 /// Intended for use as a clap `value_parser`.
 pub fn parse_pcr_selection(spec: &str) -> Result<PcrSelectionList, String> {
     let mut builder = PcrSelectionListBuilder::new();
+    let mut needs_four_octets = false;
 
     for bank_spec in spec.split('+') {
         let (alg_str, indices_str) = bank_spec
@@ -367,7 +763,12 @@ pub fn parse_pcr_selection(spec: &str) -> Result<PcrSelectionList, String> {
 
         let alg = parse_hashing_algorithm(alg_str)?;
         let slots = parse_pcr_indices(indices_str)?;
+        needs_four_octets |= slots.iter().any(|slot| pcr_slot_to_index(*slot) >= 24);
         builder = builder.with_selection(alg, &slots);
+    }
+
+    if needs_four_octets {
+        builder = builder.with_size_of_select(PcrSelectSize::FourOctets);
     }
 
     builder
@@ -375,14 +776,45 @@ pub fn parse_pcr_selection(spec: &str) -> Result<PcrSelectionList, String> {
         .map_err(|e| format!("failed to build PCR selection list: {e}"))
 }
 
-/// Build a default selection covering sha256 and sha1, all 24 PCRs.
-pub fn default_pcr_selection() -> Result<PcrSelectionList, String> {
-    let all_slots = all_pcr_slots();
-    PcrSelectionListBuilder::new()
-        .with_selection(HashingAlgorithm::Sha256, &all_slots)
-        .with_selection(HashingAlgorithm::Sha1, &all_slots)
+/// Parse a PCR allocation string like `sha256:0,1,2+sha1:all`.
+pub fn parse_pcr_allocation(spec: &str) -> Result<PcrSelectionList, String> {
+    let mut builder = PcrSelectionListBuilder::new();
+    let mut needs_four_octets = false;
+
+    for bank_spec in spec.split('+') {
+        let (algorithm, indices) = bank_spec
+            .split_once(':')
+            .ok_or_else(|| format!("invalid PCR spec: missing ':' in '{bank_spec}'"))?;
+        let algorithm = parse_hashing_algorithm(algorithm)?;
+        let slots = if indices.eq_ignore_ascii_case("all") {
+            all_pcr_slots()
+        } else {
+            indices
+                .split(',')
+                .map(|index| {
+                    let index = index
+                        .trim()
+                        .parse::<u8>()
+                        .map_err(|_| format!("invalid PCR index: {index}"))?;
+                    if index >= 32 {
+                        return Err(format!("PCR index out of range: {index}"));
+                    }
+                    index_to_pcr_slot(index)
+                        .ok_or_else(|| format!("PCR index out of range: {index}"))
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        needs_four_octets |= slots.iter().any(|slot| pcr_slot_to_index(*slot) >= 24);
+        builder = builder.with_selection(algorithm, &slots);
+    }
+
+    if needs_four_octets {
+        builder = builder.with_size_of_select(PcrSelectSize::FourOctets);
+    }
+
+    builder
         .build()
-        .map_err(|e| format!("failed to build default PCR selection list: {e}"))
+        .map_err(|e| format!("failed to build PCR allocation: {e}"))
 }
 
 /// Convert a PCR index (0..31) to the corresponding [`PcrSlot`] enum variant.
@@ -417,10 +849,6 @@ fn all_pcr_slots() -> Vec<PcrSlot> {
     (0u8..24).filter_map(index_to_pcr_slot).collect()
 }
 
-// ---------------------------------------------------------------------------
-// Symmetric mode
-// ---------------------------------------------------------------------------
-
 /// Parse a symmetric cipher mode name.
 ///
 /// Intended for use as a clap `value_parser`.
@@ -435,10 +863,6 @@ pub fn parse_symmetric_mode(s: &str) -> Result<SymmetricMode, String> {
         _ => Err(format!("unsupported symmetric mode: {s}")),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Qualification data
-// ---------------------------------------------------------------------------
 
 /// Parse qualification data from a CLI string.
 ///
@@ -475,10 +899,6 @@ pub fn parse_qualification(s: &str) -> Result<Qualification, String> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// ECC curve
-// ---------------------------------------------------------------------------
-
 /// Parse an ECC curve name.
 ///
 /// Intended for use as a clap `value_parser`.
@@ -495,10 +915,6 @@ pub fn parse_ecc_curve(s: &str) -> Result<EccCurve, String> {
         _ => Err(format!("unsupported ECC curve: {s}")),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Symmetric definition (for sessions)
-// ---------------------------------------------------------------------------
 
 /// Parse a symmetric algorithm definition.
 ///
@@ -628,10 +1044,6 @@ pub fn parse_symmetric_definition(s: &str) -> Result<SymmetricDefinition, String
     }
 }
 
-// ---------------------------------------------------------------------------
-// Sensitive data (outside info, etc.)
-// ---------------------------------------------------------------------------
-
 /// Parse raw bytes from a CLI string.
 ///
 /// Supported formats:
@@ -667,31 +1079,210 @@ pub fn parse_data(value: &str) -> Result<Data, String> {
     Data::try_from(bytes).map_err(|e| format!("data too large: {e}"))
 }
 
-// ---------------------------------------------------------------------------
-// TPM2 comparison operation
-// ---------------------------------------------------------------------------
+/// Parse a literal UTF-8 CLI string into a TPM `Data` buffer.
+pub fn parse_utf8_data(value: &str) -> Result<Data, String> {
+    Data::try_from(value.as_bytes().to_vec()).map_err(|e| format!("data too large: {e}"))
+}
 
-/// Parse a TPM2_EO_* comparison operation name to its `u16` constant.
+/// Parse a TPM comparison operation name.
 ///
 /// Intended for use as a clap `value_parser`.
-pub fn parse_tpm2_operation(s: &str) -> Result<u16, String> {
-    use tss_esapi::constants::tss::*;
+pub fn parse_tpm2_operation(s: &str) -> Result<ArithmeticComparison, String> {
     match s.to_lowercase().as_str() {
-        "eq" => Ok(TPM2_EO_EQ),
-        "neq" => Ok(TPM2_EO_NEQ),
-        "sgt" => Ok(TPM2_EO_SIGNED_GT),
-        "ugt" => Ok(TPM2_EO_UNSIGNED_GT),
-        "slt" => Ok(TPM2_EO_SIGNED_LT),
-        "ult" => Ok(TPM2_EO_UNSIGNED_LT),
-        "sge" => Ok(TPM2_EO_SIGNED_GE),
-        "uge" => Ok(TPM2_EO_UNSIGNED_GE),
-        "sle" => Ok(TPM2_EO_SIGNED_LE),
-        "ule" => Ok(TPM2_EO_UNSIGNED_LE),
-        "bs" => Ok(TPM2_EO_BITSET),
-        "bc" => Ok(TPM2_EO_BITCLEAR),
+        "eq" => Ok(ArithmeticComparison::Eq),
+        "neq" => Ok(ArithmeticComparison::Neq),
+        "sgt" => Ok(ArithmeticComparison::SignedGt),
+        "ugt" => Ok(ArithmeticComparison::UnsignedGt),
+        "slt" => Ok(ArithmeticComparison::SignedLt),
+        "ult" => Ok(ArithmeticComparison::UnsignedLt),
+        "sge" => Ok(ArithmeticComparison::SignedGe),
+        "uge" => Ok(ArithmeticComparison::UnsignedGe),
+        "sle" => Ok(ArithmeticComparison::SignedLe),
+        "ule" => Ok(ArithmeticComparison::UnsignedLe),
+        "bs" => Ok(ArithmeticComparison::BitSet),
+        "bc" => Ok(ArithmeticComparison::BitClear),
         _ => Err(format!(
             "unknown operation: {s}; expected eq/neq/sgt/ugt/slt/ult/sge/uge/sle/ule/bs/bc"
         )),
+    }
+}
+
+fn decode_hex_argument(s: &str, description: &str) -> Result<Vec<u8>, String> {
+    let digits = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .unwrap_or(s);
+    hex::decode(digits).map_err(|e| format!("invalid {description} hex: {e}"))
+}
+
+pub fn parse_hex_digest(s: &str) -> Result<Digest, String> {
+    Digest::try_from(decode_hex_argument(s, "digest")?).map_err(|e| format!("invalid digest: {e}"))
+}
+
+pub fn parse_hex_nonce(s: &str) -> Result<Nonce, String> {
+    Nonce::try_from(decode_hex_argument(s, "nonce")?).map_err(|e| format!("invalid nonce: {e}"))
+}
+
+pub fn parse_hex_timeout(s: &str) -> Result<Timeout, String> {
+    Timeout::try_from(decode_hex_argument(s, "timeout")?)
+        .map_err(|e| format!("invalid timeout: {e}"))
+}
+
+pub fn parse_hex_name(s: &str) -> Result<Name, String> {
+    Name::try_from(decode_hex_argument(s, "name")?).map_err(|e| format!("invalid name: {e}"))
+}
+
+/// Parse a command code from its hexadecimal value or a commonly used name.
+pub fn parse_command_code(s: &str) -> Result<CommandCode, String> {
+    use tss_esapi::constants::tss::*;
+
+    let digits = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .unwrap_or(s);
+    if let Ok(raw) = u32::from_str_radix(digits, 16) {
+        return CommandCode::try_from(raw)
+            .map_err(|e| format!("invalid command code 0x{raw:08x}: {e}"));
+    }
+
+    let raw = match s.to_ascii_lowercase().as_str() {
+        "unseal" => TPM2_CC_Unseal,
+        "sign" => TPM2_CC_Sign,
+        "nv_read" | "nvread" => TPM2_CC_NV_Read,
+        "nv_write" | "nvwrite" => TPM2_CC_NV_Write,
+        "duplicate" => TPM2_CC_Duplicate,
+        "certify" => TPM2_CC_Certify,
+        "quote" => TPM2_CC_Quote,
+        "create" => TPM2_CC_Create,
+        _ => return Err(format!("unknown command code: {s}")),
+    };
+    CommandCode::try_from(raw).map_err(|e| format!("invalid command code: {e}"))
+}
+
+pub fn parse_command_code_list(s: &str) -> Result<CommandCodeList, String> {
+    let command_codes = s
+        .split(',')
+        .map(|code| parse_command_code(code.trim()))
+        .collect::<Result<Vec<_>, _>>()?;
+    CommandCodeList::try_from(command_codes).map_err(|e| format!("invalid command code list: {e}"))
+}
+
+/// Parse a locality number (decimal) or locality bit mask (`0x`-prefixed hex).
+pub fn parse_locality(s: &str) -> Result<LocalityAttributes, String> {
+    let value = if let Some(digits) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        u8::from_str_radix(digits, 16).map_err(|_| format!("invalid locality: {s}"))?
+    } else {
+        s.parse::<u8>()
+            .map_err(|_| format!("invalid locality: {s}"))?
+    };
+    Ok(LocalityAttributes(value))
+}
+
+/// A fully parsed PCR extend argument.
+#[derive(Debug, Clone)]
+pub struct PcrExtendArgument {
+    pcr_index: u8,
+    pcr_handle: PcrHandle,
+    digest_values: DigestValues,
+}
+
+impl PcrExtendArgument {
+    pub fn pcr_index(&self) -> u8 {
+        self.pcr_index
+    }
+
+    pub fn pcr_handle(&self) -> PcrHandle {
+        self.pcr_handle
+    }
+
+    pub fn digest_values(&self) -> &DigestValues {
+        &self.digest_values
+    }
+}
+
+pub fn parse_pcr_extend_argument(s: &str) -> Result<PcrExtendArgument, String> {
+    let (pcr_index, digests) = s
+        .split_once(':')
+        .ok_or_else(|| "expected format <pcr>:<alg>=<hex>".to_owned())?;
+    let pcr_index = pcr_index
+        .parse::<u8>()
+        .map_err(|_| format!("invalid PCR index: {pcr_index}"))?;
+    let pcr_handle = pcr_index_to_handle(pcr_index)?;
+
+    let mut digest_values = DigestValues::new();
+    for item in digests.split('+') {
+        let (algorithm, digest) = item
+            .split_once('=')
+            .ok_or_else(|| format!("expected <alg>=<hex> in '{item}'"))?;
+        let algorithm = parse_hashing_algorithm(algorithm)?;
+        let digest_bytes = decode_hex_argument(digest, "PCR digest")?;
+        let expected_size = hashing_algorithm_digest_size(algorithm)
+            .ok_or_else(|| "null is not a valid PCR digest algorithm".to_owned())?;
+        if digest_bytes.len() != expected_size {
+            return Err(format!(
+                "invalid {algorithm:?} digest size: expected {expected_size} bytes, got {}",
+                digest_bytes.len()
+            ));
+        }
+        let digest =
+            Digest::try_from(digest_bytes).map_err(|e| format!("invalid PCR digest: {e}"))?;
+        digest_values.set(algorithm, digest);
+    }
+
+    Ok(PcrExtendArgument {
+        pcr_index,
+        pcr_handle,
+        digest_values,
+    })
+}
+
+fn hashing_algorithm_digest_size(algorithm: HashingAlgorithm) -> Option<usize> {
+    match algorithm {
+        HashingAlgorithm::Sha1 => Some(20),
+        HashingAlgorithm::Sha256 | HashingAlgorithm::Sm3_256 | HashingAlgorithm::Sha3_256 => {
+            Some(32)
+        }
+        HashingAlgorithm::Sha384 | HashingAlgorithm::Sha3_384 => Some(48),
+        HashingAlgorithm::Sha512 | HashingAlgorithm::Sha3_512 => Some(64),
+        HashingAlgorithm::Null => None,
+    }
+}
+
+fn pcr_index_to_handle(index: u8) -> Result<PcrHandle, String> {
+    match index {
+        0 => Ok(PcrHandle::Pcr0),
+        1 => Ok(PcrHandle::Pcr1),
+        2 => Ok(PcrHandle::Pcr2),
+        3 => Ok(PcrHandle::Pcr3),
+        4 => Ok(PcrHandle::Pcr4),
+        5 => Ok(PcrHandle::Pcr5),
+        6 => Ok(PcrHandle::Pcr6),
+        7 => Ok(PcrHandle::Pcr7),
+        8 => Ok(PcrHandle::Pcr8),
+        9 => Ok(PcrHandle::Pcr9),
+        10 => Ok(PcrHandle::Pcr10),
+        11 => Ok(PcrHandle::Pcr11),
+        12 => Ok(PcrHandle::Pcr12),
+        13 => Ok(PcrHandle::Pcr13),
+        14 => Ok(PcrHandle::Pcr14),
+        15 => Ok(PcrHandle::Pcr15),
+        16 => Ok(PcrHandle::Pcr16),
+        17 => Ok(PcrHandle::Pcr17),
+        18 => Ok(PcrHandle::Pcr18),
+        19 => Ok(PcrHandle::Pcr19),
+        20 => Ok(PcrHandle::Pcr20),
+        21 => Ok(PcrHandle::Pcr21),
+        22 => Ok(PcrHandle::Pcr22),
+        23 => Ok(PcrHandle::Pcr23),
+        24 => Ok(PcrHandle::Pcr24),
+        25 => Ok(PcrHandle::Pcr25),
+        26 => Ok(PcrHandle::Pcr26),
+        27 => Ok(PcrHandle::Pcr27),
+        28 => Ok(PcrHandle::Pcr28),
+        29 => Ok(PcrHandle::Pcr29),
+        30 => Ok(PcrHandle::Pcr30),
+        31 => Ok(PcrHandle::Pcr31),
+        _ => Err(format!("PCR index out of range: {index}")),
     }
 }
 
@@ -777,5 +1368,56 @@ mod tests {
     #[test]
     fn symdef_empty_string() {
         assert!(parse_symmetric_definition("").is_err());
+    }
+
+    #[test]
+    fn clock_adjust_is_parsed_to_tpm_type() {
+        assert_eq!(
+            parse_clock_adjust("faster").unwrap(),
+            ClockAdjust::CoarseFaster
+        );
+        assert!(parse_clock_adjust("warp").is_err());
+    }
+
+    #[test]
+    fn signature_scheme_kind_is_validated_without_hash_context() {
+        assert_eq!(
+            parse_signature_scheme_kind("ecdsa").unwrap(),
+            SignatureSchemeKind::EcDsa
+        );
+        assert!(parse_signature_scheme_kind("invalid").is_err());
+    }
+
+    #[test]
+    fn nv_auth_entity_rejects_unknown_values() {
+        assert!(matches!(
+            parse_nv_auth_entity("index"),
+            Ok(NvAuthEntity::NvIndex)
+        ));
+        assert!(parse_nv_auth_entity("typo").is_err());
+    }
+
+    #[test]
+    fn command_code_list_is_parsed_atomically() {
+        assert!(parse_command_code_list("unseal,0x0000015d").is_ok());
+        assert!(parse_command_code_list("unseal,not-a-command").is_err());
+    }
+
+    #[test]
+    fn pcr_extend_argument_rejects_invalid_input() {
+        let valid = format!("7:sha256={}", "00".repeat(32));
+        let parsed = parse_pcr_extend_argument(&valid).unwrap();
+        assert_eq!(parsed.pcr_index(), 7);
+        assert!(parse_pcr_extend_argument("32:sha256=00").is_err());
+        assert!(parse_pcr_extend_argument("7:sha256=00").is_err());
+        assert!(parse_pcr_extend_argument("7:sha256=not-hex").is_err());
+    }
+
+    #[test]
+    fn typed_hex_structures_reject_bad_hex() {
+        assert!(parse_hex_digest("00ff").is_ok());
+        assert!(parse_hex_digest("xyz").is_err());
+        assert!(parse_hex_name("xyz").is_err());
+        assert!(parse_hex_timeout("xyz").is_err());
     }
 }

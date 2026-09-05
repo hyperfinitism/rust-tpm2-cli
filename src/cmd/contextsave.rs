@@ -10,12 +10,6 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_object_from_source};
 use crate::parse::parse_context_source;
-
-/// Save a loaded object's context to a file.
-///
-/// Wraps TPM2_ContextSave: saves the internal state associated with a loaded
-/// object so that it can later be restored with `contextload`.  This frees
-/// the TPM slot occupied by the object.
 #[derive(Parser)]
 pub struct ContextSaveCmd {
     /// Object to save (file:<path> or hex:<handle>)
@@ -29,7 +23,7 @@ pub struct ContextSaveCmd {
 
 impl ContextSaveCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let handle = load_object_from_source(&mut ctx, &self.context)?;
 

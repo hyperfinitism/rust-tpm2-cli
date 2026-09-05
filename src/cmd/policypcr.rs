@@ -15,10 +15,6 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::parse;
 use crate::session::load_session_from_file;
-
-/// Gate a policy on the current PCR values.
-///
-/// Wraps TPM2_PolicyPCR.
 #[derive(Parser)]
 pub struct PolicyPcrCmd {
     /// Policy session file
@@ -30,8 +26,8 @@ pub struct PolicyPcrCmd {
     pub pcr_list: PcrSelectionList,
 
     /// Expected PCR digest (hex). If empty, uses current PCR values.
-    #[arg(short = 'f', long = "pcr-digest")]
-    pub pcr_digest: Option<String>,
+    #[arg(short = 'f', long = "pcr-digest", value_parser = parse::parse_hex_digest)]
+    pub pcr_digest: Option<Digest>,
 
     /// Output file for the policy digest
     #[arg(short = 'L', long = "policy")]
@@ -40,7 +36,7 @@ pub struct PolicyPcrCmd {
 
 impl PolicyPcrCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let session = load_session_from_file(&mut ctx, &self.session, SessionType::Policy)?;
         let policy_session = session
@@ -49,14 +45,7 @@ impl PolicyPcrCmd {
 
         let pcr_selection = self.pcr_list.clone();
 
-        let pcr_digest = match &self.pcr_digest {
-            Some(hex_str) => {
-                let bytes = hex::decode(hex_str)
-                    .map_err(|e| anyhow::anyhow!("invalid PCR digest hex: {e}"))?;
-                Digest::try_from(bytes).map_err(|e| anyhow::anyhow!("invalid PCR digest: {e}"))?
-            }
-            None => Digest::default(),
-        };
+        let pcr_digest = self.pcr_digest.clone().unwrap_or_default();
 
         ctx.policy_pcr(policy_session, pcr_digest, pcr_selection)
             .context("TPM2_PolicyPCR failed")?;

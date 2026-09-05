@@ -11,11 +11,8 @@ use tss_esapi::handles::{ObjectHandle, SessionHandle};
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
+use crate::parse;
 use crate::session::load_session_from_file;
-
-/// Gate a policy on the TPM locality.
-///
-/// Wraps TPM2_PolicyLocality.
 #[derive(Parser)]
 pub struct PolicyLocalityCmd {
     /// Policy session file
@@ -23,8 +20,8 @@ pub struct PolicyLocalityCmd {
     pub session: PathBuf,
 
     /// Locality value (0-4, or bitmask as hex)
-    #[arg()]
-    pub locality: String,
+    #[arg(value_parser = parse::parse_locality)]
+    pub locality: LocalityAttributes,
 
     /// Output file for the policy digest
     #[arg(short = 'L', long = "policy")]
@@ -33,16 +30,14 @@ pub struct PolicyLocalityCmd {
 
 impl PolicyLocalityCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let session = load_session_from_file(&mut ctx, &self.session, SessionType::Policy)?;
         let policy_session = session
             .try_into()
             .map_err(|_| anyhow::anyhow!("expected a policy session"))?;
 
-        let locality = parse_locality(&self.locality)?;
-
-        ctx.policy_locality(policy_session, locality)
+        ctx.policy_locality(policy_session, self.locality)
             .context("TPM2_PolicyLocality failed")?;
 
         info!("policy locality set");
@@ -60,18 +55,4 @@ impl PolicyLocalityCmd {
 
         Ok(())
     }
-}
-
-fn parse_locality(s: &str) -> anyhow::Result<LocalityAttributes> {
-    let stripped = s
-        .strip_prefix("0x")
-        .or_else(|| s.strip_prefix("0X"))
-        .unwrap_or(s);
-    let val: u8 = if let Ok(v) = u8::from_str_radix(stripped, 16) {
-        v
-    } else {
-        s.parse()
-            .map_err(|_| anyhow::anyhow!("invalid locality: {s}"))?
-    };
-    Ok(LocalityAttributes(val))
 }

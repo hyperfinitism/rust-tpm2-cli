@@ -6,20 +6,16 @@ use log::info;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
-
-/// Run the TPM self test.
-///
-/// Wraps TPM2_SelfTest.
 #[derive(Parser)]
 pub struct SelfTestCmd {
-    /// Run full self test (default: true)
+    /// Run the full self-test
     #[arg(long = "full-test", default_value = "true")]
     pub full_test: bool,
 }
 
 impl SelfTestCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         ctx.execute_without_session(|ctx| ctx.self_test(self.full_test))
             .context("TPM2_SelfTest failed")?;

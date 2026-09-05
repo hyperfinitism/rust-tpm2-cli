@@ -6,8 +6,6 @@ use log::info;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
-
-/// Send TPM2_Startup command.
 #[derive(Parser)]
 pub struct StartupCmd {
     /// Send Startup(CLEAR) — reset TPM state
@@ -17,7 +15,7 @@ pub struct StartupCmd {
 
 impl StartupCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let startup_type = if self.clear {
             tss_esapi::constants::StartupType::Clear

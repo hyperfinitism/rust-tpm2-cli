@@ -14,22 +14,17 @@ use crate::handle::{ContextSource, load_object_from_source};
 use crate::output;
 use crate::parse::{self, parse_context_source};
 use crate::session::execute_with_optional_session;
-
-/// Compute an HMAC using the TPM.
-///
-/// Wraps TPM2_HMAC: computes an HMAC over the input data using the
-/// specified loaded HMAC key and hash algorithm.
 #[derive(Parser)]
 pub struct HmacCmd {
     /// HMAC key context (file:<path> or hex:<handle>)
     #[arg(short = 'c', long = "key-context", value_parser = parse_context_source)]
     pub key_context: ContextSource,
 
-    /// Auth value for the key
+    /// Authorization value for the key
     #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
 
-    /// Hash algorithm (default: sha256)
+    /// Hash algorithm
     #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
     pub hash_algorithm: HashingAlgorithm,
 
@@ -41,14 +36,14 @@ pub struct HmacCmd {
     #[arg(short = 'o', long = "output")]
     pub output: Option<PathBuf>,
 
-    /// Session context file
+    /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
     pub session: Option<PathBuf>,
 }
 
 impl HmacCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let key_handle = load_object_from_source(&mut ctx, &self.key_context)?;
         let hash_alg = self.hash_algorithm;

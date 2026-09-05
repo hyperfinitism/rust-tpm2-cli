@@ -5,23 +5,22 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::structures::{Private, PublicBuffer};
+use tss_esapi::structures::{Auth, Private, PublicBuffer};
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
-use crate::parse::parse_context_source;
+use crate::parse::{self, parse_context_source};
 use crate::session::execute_with_optional_session;
-
-/// Load a key (private + public) into the TPM under a parent.
-///
-/// The private and public files should be in raw TPM marshaled binary format
-/// as produced by `tpm2 create`.
 #[derive(Parser)]
 pub struct LoadCmd {
     /// Parent key context (file:<path> or hex:<handle>)
     #[arg(short = 'C', long = "parent-context", value_parser = parse_context_source)]
     pub parent_context: ContextSource,
+
+    /// Authorization value for the parent key
+    #[arg(short = 'P', long = "parent-auth", value_parser = parse::parse_auth)]
+    pub parent_auth: Option<Auth>,
 
     /// Private key file (raw binary)
     #[arg(short = 'r', long = "private")]
@@ -42,9 +41,13 @@ pub struct LoadCmd {
 
 impl LoadCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let parent_handle = load_key_from_source(&mut ctx, &self.parent_context)?;
+        if let Some(auth) = &self.parent_auth {
+            ctx.tr_set_auth(parent_handle.into(), auth.clone())
+                .context("failed to set parent key authorization")?;
+        }
 
         let priv_bytes = std::fs::read(&self.private)
             .with_context(|| format!("reading private file: {}", self.private.display()))?;

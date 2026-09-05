@@ -3,38 +3,25 @@
 use clap::Parser;
 
 use crate::cli::GlobalOpts;
-
-/// Decode a TPM2 response code into human-readable text.
-///
-/// This is a client-side utility that does not contact the TPM.
+use crate::parse;
 #[derive(Parser)]
 pub struct RcDecodeCmd {
     /// Response code (hex, e.g. 0x100)
-    #[arg()]
-    pub rc: String,
+    #[arg(value_parser = parse::parse_hex_u32)]
+    pub rc: u32,
 }
 
 impl RcDecodeCmd {
     pub fn execute(&self, _global: &GlobalOpts) -> anyhow::Result<()> {
-        let stripped = self
-            .rc
-            .strip_prefix("0x")
-            .or_else(|| self.rc.strip_prefix("0X"))
-            .unwrap_or(&self.rc);
-        let code: u32 = u32::from_str_radix(stripped, 16)
-            .map_err(|_| anyhow::anyhow!("invalid response code: {}", self.rc))?;
+        let code = self.rc;
 
         println!("0x{code:08X}:");
-
-        // Decode the error format
         let fmt1 = (code & 0x80) != 0;
 
         if code == 0 {
             println!("  TPM_RC_SUCCESS");
             return Ok(());
         }
-
-        // Check for format 1 (parameter/session/handle errors)
         if fmt1 {
             let error_number = code & 0x3F;
             let parameter = (code >> 8) & 0xF;

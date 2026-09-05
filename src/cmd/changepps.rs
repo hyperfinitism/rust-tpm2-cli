@@ -1,45 +1,37 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::tss2_esys::*;
-
+use tss_esapi::handles::ObjectHandle;
 use tss_esapi::structures::Auth;
 
 use crate::cli::GlobalOpts;
+use crate::context::create_context;
 use crate::parse;
-use crate::raw_esys::RawEsysContext;
-
-/// Replace the platform primary seed and flush resident objects.
-///
-/// Wraps TPM2_ChangePPS (raw FFI).
+use crate::session::execute_with_optional_session;
 #[derive(Parser)]
 pub struct ChangePpsCmd {
-    /// Auth value for the platform hierarchy
+    /// Authorization value for the platform hierarchy
     #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
+
+    /// Session context file for authorization
+    #[arg(short = 'S', long = "session")]
+    pub session: Option<std::path::PathBuf>,
 }
 
 impl ChangePpsCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         if let Some(ref auth) = self.auth {
-            raw.set_auth(ESYS_TR_RH_PLATFORM, auth.as_bytes())?;
+            ctx.tr_set_auth(ObjectHandle::Platform, auth.clone())
+                .context("failed to set platform authorization")?;
         }
 
-        unsafe {
-            let rc = Esys_ChangePPS(
-                raw.ptr(),
-                ESYS_TR_RH_PLATFORM,
-                ESYS_TR_PASSWORD,
-                ESYS_TR_NONE,
-                ESYS_TR_NONE,
-            );
-            if rc != 0 {
-                anyhow::bail!("Esys_ChangePPS failed: 0x{rc:08x}");
-            }
-        }
+        execute_with_optional_session(&mut ctx, self.session.as_deref(), |ctx| ctx.change_pps())
+            .context("TPM2_ChangePPS failed")?;
 
         info!("platform primary seed changed");
         Ok(())

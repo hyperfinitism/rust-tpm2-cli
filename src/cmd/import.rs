@@ -15,17 +15,13 @@ use crate::context::create_context;
 use crate::handle::{ContextSource, load_object_from_source};
 use crate::parse::{self, parse_context_source};
 use crate::session::execute_with_optional_session;
-
-/// Import an external object into the TPM under a parent key.
-///
-/// Wraps TPM2_Import.
 #[derive(Parser)]
 pub struct ImportCmd {
     /// Parent key context (file:<path> or hex:<handle>)
     #[arg(short = 'C', long = "parent-context", value_parser = parse_context_source)]
     pub parent_context: ContextSource,
 
-    /// Auth value for the parent key
+    /// Authorization value for the parent key
     #[arg(short = 'P', long = "parent-auth", value_parser = parse::parse_auth)]
     pub parent_auth: Option<Auth>,
 
@@ -46,21 +42,21 @@ pub struct ImportCmd {
     pub encryption_key: Option<PathBuf>,
 
     /// Symmetric algorithm for inner wrapper (aes128cfb, null)
-    #[arg(short = 'G', long = "wrapper-algorithm", default_value = "null")]
-    pub wrapper_algorithm: String,
+    #[arg(short = 'G', long = "wrapper-algorithm", default_value = "null", value_parser = parse::parse_wrapper_algorithm)]
+    pub wrapper_algorithm: SymmetricDefinitionObject,
 
     /// Output file for the imported private
     #[arg(short = 'o', long = "output")]
     pub output: PathBuf,
 
-    /// Session context file
+    /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
     pub session: Option<PathBuf>,
 }
 
 impl ImportCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let parent_handle = load_object_from_source(&mut ctx, &self.parent_context)?;
 
@@ -96,8 +92,6 @@ impl ImportCmd {
             None => None,
         };
 
-        let sym_alg = parse_wrapper_algorithm(&self.wrapper_algorithm)?;
-
         let session_path = self.session.as_deref();
         let imported_private = execute_with_optional_session(&mut ctx, session_path, |ctx| {
             ctx.import(
@@ -106,7 +100,7 @@ impl ImportCmd {
                 public.clone(),
                 duplicate.clone(),
                 encrypted_secret.clone(),
-                sym_alg,
+                self.wrapper_algorithm,
             )
         })
         .context("TPM2_Import failed")?;
@@ -117,20 +111,5 @@ impl ImportCmd {
         info!("imported private saved to {}", self.output.display());
 
         Ok(())
-    }
-}
-
-fn parse_wrapper_algorithm(s: &str) -> anyhow::Result<SymmetricDefinitionObject> {
-    match s.to_lowercase().as_str() {
-        "null" => Ok(SymmetricDefinitionObject::Null),
-        "aes128cfb" | "aes" => Ok(SymmetricDefinitionObject::Aes {
-            key_bits: tss_esapi::interface_types::key_bits::AesKeyBits::Aes128,
-            mode: tss_esapi::interface_types::algorithm::SymmetricMode::Cfb,
-        }),
-        "aes256cfb" => Ok(SymmetricDefinitionObject::Aes {
-            key_bits: tss_esapi::interface_types::key_bits::AesKeyBits::Aes256,
-            mode: tss_esapi::interface_types::algorithm::SymmetricMode::Cfb,
-        }),
-        _ => anyhow::bail!("unsupported wrapper algorithm: {s}"),
     }
 }

@@ -6,21 +6,20 @@ use anyhow::Context;
 use clap::Parser;
 use log::info;
 use tss_esapi::interface_types::algorithm::HashingAlgorithm;
+use tss_esapi::structures::Auth;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::parse;
-
-/// Start a hash sequence on the TPM.
-///
-/// Wraps TPM2_HashSequenceStart: begins an incremental hash computation.
-/// The returned sequence handle is saved to a context file for use with
-/// `sequenceupdate` and `sequencecomplete`.
 #[derive(Parser)]
 pub struct HashSequenceStartCmd {
-    /// Hash algorithm (default: sha256)
+    /// Hash algorithm
     #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
     pub hash_algorithm: HashingAlgorithm,
+
+    /// Authorization value for the new sequence
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
 
     /// Output file for the sequence context
     #[arg(short = 'o', long = "output")]
@@ -29,15 +28,13 @@ pub struct HashSequenceStartCmd {
 
 impl HashSequenceStartCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let hash_alg = self.hash_algorithm;
 
         let seq_handle = ctx
-            .hash_sequence_start(hash_alg, None)
+            .hash_sequence_start(hash_alg, self.auth.clone())
             .context("TPM2_HashSequenceStart failed")?;
-
-        // Save the sequence handle context.
         let saved = ctx
             .context_save(seq_handle)
             .context("context_save failed")?;

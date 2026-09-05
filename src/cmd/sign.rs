@@ -5,11 +5,9 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::constants::tss::TPM2_RH_NULL;
 use tss_esapi::interface_types::algorithm::HashingAlgorithm;
-use tss_esapi::structures::{Digest, HashcheckTicket};
+use tss_esapi::structures::{Auth, Digest, HashcheckTicket};
 use tss_esapi::traits::Marshall;
-use tss_esapi::tss2_esys::TPMT_TK_HASHCHECK;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
@@ -17,21 +15,23 @@ use crate::handle::{ContextSource, load_key_from_source};
 use crate::output;
 use crate::parse::{self, parse_context_source};
 use crate::session::execute_with_optional_session;
-
-/// Sign a digest with a TPM key.
 #[derive(Parser)]
 pub struct SignCmd {
     /// Signing key context (file:<path> or hex:<handle>)
     #[arg(short = 'c', long = "context", value_parser = parse_context_source)]
     pub context: ContextSource,
 
-    /// Hash algorithm (sha1, sha256, sha384, sha512)
+    /// Authorization value for the signing key
+    #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
+    pub auth: Option<Auth>,
+
+    /// Hash algorithm
     #[arg(short = 'g', long = "hash-algorithm", default_value = "sha256", value_parser = parse::parse_hashing_algorithm)]
     pub hash_algorithm: HashingAlgorithm,
 
     /// Signature scheme (rsassa, rsapss, ecdsa)
-    #[arg(short = 's', long = "scheme", default_value = "rsassa")]
-    pub scheme: String,
+    #[arg(short = 's', long = "scheme", default_value = "rsassa", value_parser = parse::parse_signature_scheme_kind)]
+    pub scheme: parse::SignatureSchemeKind,
 
     /// File containing the digest to sign
     #[arg(short = 'd', long = "digest")]
@@ -52,11 +52,14 @@ pub struct SignCmd {
 
 impl SignCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let key_handle = load_key_from_source(&mut ctx, &self.context)?;
-        let scheme = parse::parse_signature_scheme(&self.scheme, self.hash_algorithm)
-            .map_err(anyhow::Error::msg)?;
+        if let Some(auth) = &self.auth {
+            ctx.tr_set_auth(key_handle.into(), auth.clone())
+                .context("failed to set signing key authorization")?;
+        }
+        let scheme = self.scheme.with_hash(self.hash_algorithm);
 
         let digest_bytes = std::fs::read(&self.digest)
             .with_context(|| format!("reading digest: {}", self.digest.display()))?;
@@ -66,21 +69,9 @@ impl SignCmd {
         let validation = if let Some(ref ticket_path) = self.ticket {
             let ticket_data = std::fs::read(ticket_path)
                 .with_context(|| format!("reading ticket from {}", ticket_path.display()))?;
-            if ticket_data.len() < std::mem::size_of::<TPMT_TK_HASHCHECK>() {
-                anyhow::bail!("ticket file too small");
-            }
-            let tss_ticket: TPMT_TK_HASHCHECK =
-                unsafe { std::ptr::read(ticket_data.as_ptr() as *const TPMT_TK_HASHCHECK) };
-            HashcheckTicket::try_from(tss_ticket)
-                .map_err(|e| anyhow::anyhow!("invalid ticket: {e}"))?
+            crate::ticket::parse_hashcheck_ticket(&ticket_data)?
         } else {
-            // Null ticket for externally-provided digests (unrestricted keys only)
-            HashcheckTicket::try_from(TPMT_TK_HASHCHECK {
-                tag: tss_esapi::constants::StructureTag::Hashcheck.into(),
-                hierarchy: TPM2_RH_NULL,
-                digest: Default::default(),
-            })
-            .map_err(|e| anyhow::anyhow!("failed to create hashcheck ticket: {e}"))?
+            HashcheckTicket::default()
         };
 
         let session_path = self.session.as_deref();

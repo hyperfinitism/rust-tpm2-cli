@@ -2,27 +2,27 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::tss2_esys::*;
+use tss_esapi::constants::SessionType;
+use tss_esapi::handles::SessionHandle;
+use tss_esapi::interface_types::ArithmeticComparison;
+use tss_esapi::structures::Digest;
 
 use crate::cli::GlobalOpts;
+use crate::context::create_context;
 use crate::parse;
-use crate::raw_esys::RawEsysContext;
-
-/// Assert policy bound to the TPM clock/counter.
-///
-/// Wraps TPM2_PolicyCounterTimer (raw FFI).
+use crate::session::{load_session_from_file, save_session_and_forget};
 #[derive(Parser)]
 pub struct PolicyCounterTimerCmd {
-    /// Policy session context file
+    /// Policy session file
     #[arg(short = 'S', long = "session")]
     pub session: PathBuf,
 
     /// Operand B (hex bytes for comparison)
-    #[arg(long = "operand-b")]
-    pub operand_b: String,
+    #[arg(long = "operand-b", value_parser = parse::parse_hex_digest)]
+    pub operand_b: Digest,
 
     /// Offset in the TPMS_TIME_INFO structure
     #[arg(long = "offset", default_value = "0")]
@@ -30,41 +30,27 @@ pub struct PolicyCounterTimerCmd {
 
     /// Operation (eq, neq, sgt, ugt, slt, ult, sge, uge, sle, ule, bs, bc)
     #[arg(long = "operation", default_value = "eq", value_parser = parse::parse_tpm2_operation)]
-    pub operation: u16,
+    pub operation: ArithmeticComparison,
 }
 
 impl PolicyCounterTimerCmd {
-    #[allow(clippy::field_reassign_with_default)]
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
-        let session_handle = raw.context_load(
-            self.session
-                .to_str()
-                .ok_or_else(|| anyhow::anyhow!("invalid session path"))?,
-        )?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
+        let session = load_session_from_file(&mut ctx, &self.session, SessionType::Policy)?;
+        let policy_session = session
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("expected a policy session"))?;
 
-        let operand_bytes = hex::decode(&self.operand_b).context("invalid operand-b hex")?;
-        let mut operand = TPM2B_OPERAND::default();
-        operand.size = operand_bytes.len() as u16;
-        operand.buffer[..operand_bytes.len()].copy_from_slice(&operand_bytes);
+        ctx.policy_counter_timer(
+            policy_session,
+            self.operand_b.clone(),
+            self.offset,
+            self.operation,
+        )
+        .context("TPM2_PolicyCounterTimer failed")?;
 
-        unsafe {
-            let rc = Esys_PolicyCounterTimer(
-                raw.ptr(),
-                session_handle,
-                ESYS_TR_NONE,
-                ESYS_TR_NONE,
-                ESYS_TR_NONE,
-                &operand,
-                self.offset,
-                self.operation,
-            );
-            if rc != 0 {
-                bail!("Esys_PolicyCounterTimer failed: 0x{rc:08x}");
-            }
-        }
-
-        raw.context_save_to_file(session_handle, &self.session)?;
+        let session_handle = SessionHandle::from(policy_session);
+        save_session_and_forget(ctx, session_handle, &self.session)?;
         info!("policy counter/timer asserted");
         Ok(())
     }

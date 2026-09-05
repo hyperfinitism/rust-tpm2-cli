@@ -7,16 +7,11 @@ use clap::Parser;
 use log::info;
 use tss_esapi::constants::SessionType;
 use tss_esapi::handles::{ObjectHandle, SessionHandle};
-use tss_esapi::structures::{Digest, Name, Nonce, VerifiedTicket};
-use tss_esapi::tss2_esys::TPMT_TK_VERIFIED;
+use tss_esapi::structures::{Digest, Name, Nonce};
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::session::load_session_from_file;
-
-/// Approve a policy with an authorized signing key.
-///
-/// Wraps TPM2_PolicyAuthorize.
 #[derive(Parser)]
 pub struct PolicyAuthorizeCmd {
     /// Policy session file
@@ -46,7 +41,7 @@ pub struct PolicyAuthorizeCmd {
 
 impl PolicyAuthorizeCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let session = load_session_from_file(&mut ctx, &self.session, SessionType::Policy)?;
         let policy_session = session
@@ -71,14 +66,7 @@ impl PolicyAuthorizeCmd {
 
         let ticket_data = std::fs::read(&self.ticket)
             .with_context(|| format!("reading ticket from {}", self.ticket.display()))?;
-        let check_ticket = if ticket_data.len() >= std::mem::size_of::<TPMT_TK_VERIFIED>() {
-            let tss_ticket: TPMT_TK_VERIFIED =
-                unsafe { std::ptr::read(ticket_data.as_ptr() as *const TPMT_TK_VERIFIED) };
-            VerifiedTicket::try_from(tss_ticket)
-                .map_err(|e| anyhow::anyhow!("invalid ticket: {e}"))?
-        } else {
-            anyhow::bail!("ticket file too small");
-        };
+        let check_ticket = crate::ticket::parse_verified_ticket(&ticket_data)?;
 
         ctx.policy_authorize(
             policy_session,

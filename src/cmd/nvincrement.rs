@@ -10,43 +10,39 @@ use tss_esapi::structures::Auth;
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::resolve_nv_auth;
-use crate::parse::parse_hex_u32;
+use crate::parse::{self, NvAuthEntity, parse_nv_index};
 use crate::session::execute_with_optional_session;
-
-/// Increment a monotonic counter NV index.
-///
-/// Wraps TPM2_NV_Increment.
 #[derive(Parser)]
 pub struct NvIncrementCmd {
     /// NV index (hex, e.g. 0x01000001)
-    #[arg(value_parser = parse_hex_u32)]
-    pub nv_index: u32,
+    #[arg(value_parser = parse_nv_index)]
+    pub nv_index: NvIndexTpmHandle,
 
-    /// Authorization hierarchy (o/owner, p/platform) or NV index itself
-    #[arg(short = 'C', long = "hierarchy", default_value = "o")]
-    pub hierarchy: String,
+    /// Authorization entity for the NV index (owner, platform, or nv-index)
+    #[arg(short = 'C', long = "hierarchy", default_value = "o", value_parser = parse::parse_nv_auth_entity)]
+    pub hierarchy: NvAuthEntity,
 
-    /// Auth value for the hierarchy or NV index
+    /// Authorization value for the hierarchy or NV index
     #[arg(short = 'P', long = "auth", value_parser = crate::parse::parse_auth)]
     pub auth: Option<Auth>,
 
-    /// Session context file
+    /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
     pub session: Option<std::path::PathBuf>,
 }
 
 impl NvIncrementCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
-        let nv_handle = NvIndexTpmHandle::new(self.nv_index)
-            .map_err(|e| anyhow::anyhow!("invalid NV index 0x{:08x}: {e}", self.nv_index))?;
+        let nv_handle = self.nv_index;
+        let raw_nv_index = u32::from(nv_handle);
         let tpm_handle: tss_esapi::handles::TpmHandle = nv_handle.into();
         let nv_idx = ctx
             .execute_without_session(|ctx| ctx.tr_from_tpm_public(tpm_handle))
-            .with_context(|| format!("failed to load NV index 0x{:08x}", self.nv_index))?;
+            .with_context(|| format!("failed to load NV index 0x{raw_nv_index:08x}"))?;
 
-        let nv_auth = resolve_nv_auth(&mut ctx, &self.hierarchy, nv_handle)?;
+        let nv_auth = resolve_nv_auth(&mut ctx, self.hierarchy, nv_handle)?;
 
         if let Some(ref auth) = self.auth {
             match &nv_auth {
@@ -71,7 +67,7 @@ impl NvIncrementCmd {
         })
         .context("TPM2_NV_Increment failed")?;
 
-        info!("NV index 0x{:08x} incremented", self.nv_index);
+        info!("NV index 0x{raw_nv_index:08x} incremented");
         Ok(())
     }
 }

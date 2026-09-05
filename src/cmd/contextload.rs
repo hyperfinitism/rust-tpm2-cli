@@ -9,12 +9,6 @@ use tss_esapi::structures::SavedTpmContext;
 
 use crate::cli::GlobalOpts;
 use crate::context::create_context;
-
-/// Load a previously saved context back into the TPM.
-///
-/// Wraps TPM2_ContextLoad: restores an object (key, session, etc.) from a
-/// previously saved context file.  The restored handle is saved to a new
-/// context file.
 #[derive(Parser)]
 pub struct ContextLoadCmd {
     /// Input file containing the saved context (JSON)
@@ -28,7 +22,7 @@ pub struct ContextLoadCmd {
 
 impl ContextLoadCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let data = std::fs::read(&self.context)
             .with_context(|| format!("reading context from {}", self.context.display()))?;
@@ -36,8 +30,6 @@ impl ContextLoadCmd {
             serde_json::from_slice(&data).context("failed to deserialize saved context")?;
 
         let handle = ctx.context_load(saved).context("TPM2_ContextLoad failed")?;
-
-        // Save the restored handle to a new context file.
         let saved = ctx
             .context_save(handle)
             .context("context_save after load failed")?;

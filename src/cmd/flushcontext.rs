@@ -2,11 +2,11 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, bail};
-use clap::Parser;
+use anyhow::Context;
+use clap::{ArgGroup, Parser};
 use log::info;
 use tss_esapi::constants::CapabilityType;
-use tss_esapi::handles::ObjectHandle;
+use tss_esapi::handles::TpmHandle;
 use tss_esapi::structures::CapabilityData;
 use tss_esapi::structures::SavedTpmContext;
 
@@ -16,62 +16,68 @@ use crate::context::create_context;
 const HR_TRANSIENT: u32 = 0x80000000;
 const HR_LOADED_SESSION: u32 = 0x02000000;
 const HR_SAVED_SESSION: u32 = 0x03000000;
-
-/// Flush a loaded handle from the TPM.
-///
-/// Supports hex handles, context files, and bulk flags to flush all
-/// objects of a given type.
 #[derive(Parser)]
+#[command(group(
+    ArgGroup::new("target")
+        .required(true)
+        .multiple(false)
+        .args(["handle", "handle_hex", "transient_object", "loaded_session", "saved_session"])
+))]
 pub struct FlushContextCmd {
     /// Context file path to flush
-    #[arg(long = "context", conflicts_with_all = ["handle_hex", "transient_object", "loaded_session", "saved_session"])]
+    #[arg(long = "context")]
     pub handle: Option<PathBuf>,
 
     /// Hex handle to flush (e.g. 0x80000000)
-    #[arg(long = "handle", value_parser = crate::parse::parse_hex_u32, conflicts_with_all = ["handle", "transient_object", "loaded_session", "saved_session"])]
-    pub handle_hex: Option<u32>,
+    #[arg(long = "handle", value_parser = crate::parse::parse_tpm_handle)]
+    pub handle_hex: Option<tss_esapi::handles::TpmHandle>,
 
     /// Flush all transient objects
-    #[arg(long = "transient-object", conflicts_with_all = ["handle", "loaded_session", "saved_session"])]
+    #[arg(long = "transient-object")]
     pub transient_object: bool,
 
     /// Flush all loaded sessions
-    #[arg(long = "loaded-session", conflicts_with_all = ["handle", "transient_object", "saved_session"])]
+    #[arg(long = "loaded-session")]
     pub loaded_session: bool,
 
     /// Flush all saved sessions
-    #[arg(long = "saved-session", conflicts_with_all = ["handle", "transient_object", "loaded_session"])]
+    #[arg(long = "saved-session")]
     pub saved_session: bool,
+
+    /// Maximum handles requested per capability query during bulk flush
+    #[arg(short = 'n', long = "count", default_value = "254", value_parser = clap::value_parser!(u32).range(1..))]
+    pub count: u32,
 }
 
 impl FlushContextCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         if self.transient_object {
-            return flush_all_handles(&mut ctx, HR_TRANSIENT, "transient objects");
+            return flush_all_handles(&mut ctx, HR_TRANSIENT, self.count, "transient objects");
         }
         if self.loaded_session {
-            return flush_all_handles(&mut ctx, HR_LOADED_SESSION, "loaded sessions");
+            return flush_all_handles(&mut ctx, HR_LOADED_SESSION, self.count, "loaded sessions");
         }
         if self.saved_session {
-            return flush_all_handles(&mut ctx, HR_SAVED_SESSION, "saved sessions");
+            return flush_all_handles(&mut ctx, HR_SAVED_SESSION, self.count, "saved sessions");
         }
 
-        if let Some(raw) = self.handle_hex {
-            let handle = ObjectHandle::from(raw);
+        if let Some(tpm_handle) = self.handle_hex {
+            let raw = u32::from(tpm_handle);
+            let handle = ctx
+                .execute_without_session(|ctx| ctx.tr_from_tpm_public(tpm_handle))
+                .context("failed to resolve TPM handle")?;
             ctx.flush_context(handle)
                 .context("TPM2_FlushContext failed")?;
             info!("flushed handle 0x{raw:08x}");
             return Ok(());
         }
 
-        let path = match &self.handle {
-            Some(p) => p,
-            None => bail!(
-                "provide --context, --handle, or a bulk flush flag (--transient-object, --loaded-session, --saved-session)"
-            ),
-        };
+        let path = self
+            .handle
+            .as_ref()
+            .expect("clap requires exactly one flush target");
 
         let data = std::fs::read(path)
             .with_context(|| format!("reading context file: {}", path.display()))?;
@@ -89,9 +95,10 @@ impl FlushContextCmd {
 fn flush_all_handles(
     ctx: &mut tss_esapi::Context,
     range_start: u32,
+    count: u32,
     label: &str,
 ) -> anyhow::Result<()> {
-    let handles = get_handles(ctx, range_start)?;
+    let handles = get_handles(ctx, range_start, count)?;
 
     if handles.is_empty() {
         info!("no {label} to flush");
@@ -99,15 +106,18 @@ fn flush_all_handles(
     }
 
     let mut flushed = 0u32;
-    for h in &handles {
-        let handle = ObjectHandle::from(*h);
-        match ctx.flush_context(handle) {
+    for tpm_handle in &handles {
+        let raw = u32::from(*tpm_handle);
+        let result = ctx
+            .execute_without_session(|ctx| ctx.tr_from_tpm_public(*tpm_handle))
+            .and_then(|handle| ctx.flush_context(handle));
+        match result {
             Ok(()) => {
-                info!("flushed 0x{h:08x}");
+                info!("flushed 0x{raw:08x}");
                 flushed += 1;
             }
             Err(e) => {
-                log::warn!("failed to flush 0x{h:08x}: {e}");
+                log::warn!("failed to flush 0x{raw:08x}: {e}");
             }
         }
     }
@@ -116,22 +126,26 @@ fn flush_all_handles(
     Ok(())
 }
 
-fn get_handles(ctx: &mut tss_esapi::Context, start: u32) -> anyhow::Result<Vec<u32>> {
+fn get_handles(
+    ctx: &mut tss_esapi::Context,
+    start: u32,
+    count: u32,
+) -> anyhow::Result<Vec<TpmHandle>> {
     let mut all_handles = Vec::new();
     let mut property = start;
     loop {
         let (data, more) = ctx
             .execute_without_session(|ctx| {
-                ctx.get_capability(CapabilityType::Handles, property, 254)
+                ctx.get_capability(CapabilityType::Handles, property, count)
             })
             .context("TPM2_GetCapability (handles) failed")?;
 
         if let CapabilityData::Handles(list) = data {
-            let raw: Vec<u32> = list.into_inner().iter().map(|h| u32::from(*h)).collect();
-            if let Some(&last) = raw.last() {
-                property = last.saturating_add(1);
+            let handles = list.into_inner();
+            if let Some(last) = handles.last() {
+                property = u32::from(*last).saturating_add(1);
             }
-            all_handles.extend(raw);
+            all_handles.extend(handles);
         }
 
         if !more {

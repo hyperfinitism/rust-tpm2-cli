@@ -13,15 +13,7 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source, load_object_from_source};
 use crate::parse::{self, parse_context_source};
-use crate::session::load_session_from_file;
-use tss_esapi::constants::SessionType;
-use tss_esapi::interface_types::session_handles::AuthSession;
-
-/// Certify that an object is loaded in the TPM.
-///
-/// Wraps TPM2_Certify: the signing key produces a signed attestation
-/// structure proving that the certified object is loaded and
-/// self-consistent.
+use crate::session::load_optional_auth_session;
 #[derive(Parser)]
 pub struct CertifyCmd {
     /// Object to certify (file:<path> or hex:<handle>)
@@ -32,11 +24,11 @@ pub struct CertifyCmd {
     #[arg(short = 'C', long = "signingkey-context", value_parser = parse_context_source)]
     pub signing_context: ContextSource,
 
-    /// Auth value for the certified object
+    /// Authorization value for the certified object
     #[arg(short = 'P', long = "certifiedkey-auth", value_parser = parse::parse_auth)]
     pub certified_auth: Option<Auth>,
 
-    /// Auth value for the signing key
+    /// Authorization value for the signing key
     #[arg(short = 'p', long = "signingkey-auth", value_parser = parse::parse_auth)]
     pub signing_auth: Option<Auth>,
 
@@ -45,8 +37,8 @@ pub struct CertifyCmd {
     pub hash_algorithm: HashingAlgorithm,
 
     /// Signature scheme (rsassa, rsapss, ecdsa, null)
-    #[arg(long = "scheme", default_value = "null")]
-    pub scheme: String,
+    #[arg(long = "scheme", default_value = "null", value_parser = parse::parse_signature_scheme_kind)]
+    pub scheme: parse::SignatureSchemeKind,
 
     /// Qualifying data (hex:<hex_bytes> or file:<path>)
     #[arg(short = 'q', long = "qualification", value_parser = parse::parse_qualification)]
@@ -63,16 +55,19 @@ pub struct CertifyCmd {
     /// Session context file for authorization
     #[arg(short = 'S', long = "session")]
     pub session: Option<PathBuf>,
+
+    /// Session context file for signing key authorization
+    #[arg(long = "signing-session")]
+    pub signing_session: Option<PathBuf>,
 }
 
 impl CertifyCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut ctx = create_context(global.tcti.as_deref())?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
 
         let object_handle = load_object_from_source(&mut ctx, &self.certified_context)?;
         let signing_key = load_key_from_source(&mut ctx, &self.signing_context)?;
-        let scheme = parse::parse_signature_scheme(&self.scheme, self.hash_algorithm)
-            .map_err(anyhow::Error::msg)?;
+        let scheme = self.scheme.with_hash(self.hash_algorithm);
 
         if let Some(ref auth) = self.certified_auth {
             ctx.tr_set_auth(object_handle, auth.clone())
@@ -88,16 +83,10 @@ impl CertifyCmd {
                 .map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?,
             None => Data::default(),
         };
-
-        // TPM2_Certify requires two auth sessions: one for the certified
-        // object (authSession1) and one for the signing key (authSession2).
-        // If -S is provided, use it for the certified object; otherwise
-        // fall back to password auth.  The signing key always uses password.
-        let session1 = match &self.session {
-            Some(path) => load_session_from_file(&mut ctx, path, SessionType::Hmac)?,
-            None => AuthSession::Password,
-        };
-        ctx.set_sessions((Some(session1), Some(AuthSession::Password), None));
+        let object_session = load_optional_auth_session(&mut ctx, self.session.as_deref())?;
+        let signing_session =
+            load_optional_auth_session(&mut ctx, self.signing_session.as_deref())?;
+        ctx.set_sessions((Some(object_session), Some(signing_session), None));
         let result = ctx
             .certify(object_handle, signing_key, qualifying.clone(), scheme)
             .map_err(|e| anyhow::anyhow!(e));

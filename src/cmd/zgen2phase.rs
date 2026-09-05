@@ -2,28 +2,25 @@
 
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::Parser;
 use log::info;
-use tss_esapi::constants::tss::*;
-use tss_esapi::tss2_esys::*;
-
+use tss_esapi::interface_types::algorithm::EccKeyExchangeAlgorithm;
 use tss_esapi::structures::Auth;
 
 use crate::cli::GlobalOpts;
-use crate::handle::ContextSource;
+use crate::cmd::ecc::{bytes_to_ecc_point, ecc_point_to_bytes};
+use crate::context::create_context;
+use crate::handle::{ContextSource, load_key_from_source};
 use crate::parse::{self, parse_context_source};
-use crate::raw_esys::RawEsysContext;
-
-/// Execute the second phase of a two-phase key exchange.
-///
-/// Wraps TPM2_ZGen_2Phase (raw FFI).
+use crate::session::execute_with_optional_session;
 #[derive(Parser)]
 pub struct Zgen2PhaseCmd {
     /// Key context (file:<path> or hex:<handle>)
     #[arg(short = 'c', long = "key-context", value_parser = parse_context_source)]
     pub key_context: ContextSource,
 
-    /// Auth value for the key
+    /// Authorization value for the key
     #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
 
@@ -36,8 +33,8 @@ pub struct Zgen2PhaseCmd {
     pub ephemeral_public: PathBuf,
 
     /// Key exchange scheme (ecdh, sm2)
-    #[arg(short = 's', long = "scheme", default_value = "ecdh")]
-    pub scheme: String,
+    #[arg(short = 's', long = "scheme", default_value = "ecdh", value_parser = parse::parse_ecc_key_exchange_algorithm)]
+    pub scheme: EccKeyExchangeAlgorithm,
 
     /// Counter from the commit
     #[arg(short = 't', long = "counter")]
@@ -50,86 +47,42 @@ pub struct Zgen2PhaseCmd {
     /// Output file for Z2 point
     #[arg(long = "output-Z2")]
     pub output_z2: PathBuf,
+
+    /// Session context file for authorization
+    #[arg(short = 'S', long = "session")]
+    pub session: Option<PathBuf>,
 }
 
 impl Zgen2PhaseCmd {
     pub fn execute(&self, global: &GlobalOpts) -> anyhow::Result<()> {
-        let mut raw = RawEsysContext::new(global.tcti.as_deref())?;
-        let key_handle = raw.resolve_handle_from_source(&self.key_context)?;
+        let mut ctx = create_context(global.tcti.as_ref())?;
+        let key_handle = load_key_from_source(&mut ctx, &self.key_context)?;
 
         if let Some(ref auth) = self.auth {
-            raw.set_auth(key_handle, auth.as_bytes())?;
+            ctx.tr_set_auth(key_handle.into(), auth.clone())
+                .context("failed to set key authorization")?;
         }
 
         let static_data = std::fs::read(&self.static_public)?;
         let ephemeral_data = std::fs::read(&self.ephemeral_public)?;
 
-        let in_qs = bytes_to_ecc_point(&static_data);
-        let in_qe = bytes_to_ecc_point(&ephemeral_data);
+        let in_qs = bytes_to_ecc_point(&static_data)?;
+        let in_qe = bytes_to_ecc_point(&ephemeral_data)?;
 
-        let in_scheme: u16 = match self.scheme.to_lowercase().as_str() {
-            "ecdh" => TPM2_ALG_ECDH,
-            "sm2" => TPM2_ALG_SM2,
-            _ => anyhow::bail!("unsupported scheme: {}", self.scheme),
-        };
+        let (z1, z2) = execute_with_optional_session(&mut ctx, self.session.as_deref(), |ctx| {
+            ctx.zgen_2phase(key_handle, in_qs, in_qe, self.scheme, self.counter)
+        })
+        .context("TPM2_ZGen_2Phase failed")?;
 
-        unsafe {
-            let mut z1_ptr: *mut TPM2B_ECC_POINT = std::ptr::null_mut();
-            let mut z2_ptr: *mut TPM2B_ECC_POINT = std::ptr::null_mut();
+        std::fs::write(&self.output_z1, ecc_point_to_bytes(&z1))
+            .with_context(|| format!("writing Z1 to {}", self.output_z1.display()))?;
+        info!("Z1 saved to {}", self.output_z1.display());
 
-            let rc = Esys_ZGen_2Phase(
-                raw.ptr(),
-                key_handle,
-                ESYS_TR_PASSWORD,
-                ESYS_TR_NONE,
-                ESYS_TR_NONE,
-                &in_qs,
-                &in_qe,
-                in_scheme,
-                self.counter,
-                &mut z1_ptr,
-                &mut z2_ptr,
-            );
-            if rc != 0 {
-                anyhow::bail!("Esys_ZGen_2Phase failed: 0x{rc:08x}");
-            }
-
-            if !z1_ptr.is_null() {
-                let z1 = ecc_point_to_bytes(&*z1_ptr);
-                std::fs::write(&self.output_z1, &z1)?;
-                info!("Z1 saved to {}", self.output_z1.display());
-                Esys_Free(z1_ptr as *mut _);
-            }
-
-            if !z2_ptr.is_null() {
-                let z2 = ecc_point_to_bytes(&*z2_ptr);
-                std::fs::write(&self.output_z2, &z2)?;
-                info!("Z2 saved to {}", self.output_z2.display());
-                Esys_Free(z2_ptr as *mut _);
-            }
-        }
+        std::fs::write(&self.output_z2, ecc_point_to_bytes(&z2))
+            .with_context(|| format!("writing Z2 to {}", self.output_z2.display()))?;
+        info!("Z2 saved to {}", self.output_z2.display());
 
         info!("ZGen_2Phase succeeded");
         Ok(())
     }
-}
-
-fn bytes_to_ecc_point(data: &[u8]) -> TPM2B_ECC_POINT {
-    let mut point = TPM2B_ECC_POINT::default();
-    let half = data.len() / 2;
-    let x = &data[..half];
-    let y = &data[half..];
-    point.point.x.size = x.len() as u16;
-    point.point.x.buffer[..x.len()].copy_from_slice(x);
-    point.point.y.size = y.len() as u16;
-    point.point.y.buffer[..y.len()].copy_from_slice(y);
-    point.size = std::mem::size_of::<TPMS_ECC_POINT>() as u16;
-    point
-}
-
-fn ecc_point_to_bytes(p: &TPM2B_ECC_POINT) -> Vec<u8> {
-    let mut out = Vec::new();
-    out.extend_from_slice(&p.point.x.buffer[..p.point.x.size as usize]);
-    out.extend_from_slice(&p.point.y.buffer[..p.point.y.size as usize]);
-    out
 }
