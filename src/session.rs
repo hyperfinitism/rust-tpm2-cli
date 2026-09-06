@@ -53,6 +53,20 @@ pub fn load_optional_auth_session(
     }
 }
 
+/// Load a policy or HMAC authorization session, or select password authorization.
+pub fn load_optional_policy_or_hmac_session(
+    ctx: &mut tss_esapi::Context,
+    policy_path: Option<&Path>,
+    hmac_path: Option<&Path>,
+) -> anyhow::Result<AuthSession> {
+    match (policy_path, hmac_path) {
+        (Some(path), None) => load_session_from_file(ctx, path, SessionType::Policy),
+        (None, Some(path)) => load_session_from_file(ctx, path, SessionType::Hmac),
+        (None, None) => Ok(AuthSession::Password),
+        (Some(_), Some(_)) => unreachable!("clap makes session arguments mutually exclusive"),
+    }
+}
+
 /// Load an HMAC session for repeated command authorization when supplied.
 pub fn load_command_session(
     ctx: &mut tss_esapi::Context,
@@ -83,8 +97,8 @@ where
 
 /// Execute a closure with either a loaded session or a default null-auth session.
 ///
-/// When `session_path` is `Some`, the session context file is loaded and set
-/// as the sole authorization session.  When `None`, the standard
+/// When `session_path` is `Some`, the session context is loaded, used as the
+/// sole authorization session, and saved back for a later CLI invocation. When `None`, the standard
 /// [`execute_with_nullauth_session`](tss_esapi::Context::execute_with_nullauth_session)
 /// convenience method is used.
 pub fn execute_with_optional_session<F, T>(
@@ -95,8 +109,88 @@ pub fn execute_with_optional_session<F, T>(
 where
     F: FnOnce(&mut tss_esapi::Context) -> tss_esapi::Result<T>,
 {
-    let session = load_command_session(ctx, session_path)?;
-    execute_with_command_session(ctx, session, f)
+    execute_with_optional_session_type(ctx, session_path, SessionType::Hmac, f)
+}
+
+/// Execute a closure with a policy or HMAC session, or with null authorization when omitted.
+pub fn execute_with_optional_policy_or_hmac_session<F, T>(
+    ctx: &mut tss_esapi::Context,
+    policy_path: Option<&Path>,
+    hmac_path: Option<&Path>,
+    f: F,
+) -> anyhow::Result<T>
+where
+    F: FnOnce(&mut tss_esapi::Context) -> tss_esapi::Result<T>,
+{
+    match (policy_path, hmac_path) {
+        (Some(path), None) => {
+            execute_with_optional_session_type(ctx, Some(path), SessionType::Policy, f)
+        }
+        (None, Some(path)) => {
+            execute_with_optional_session_type(ctx, Some(path), SessionType::Hmac, f)
+        }
+        (None, None) => execute_with_optional_session_type(ctx, None, SessionType::Hmac, f),
+        (Some(_), Some(_)) => unreachable!("clap makes session arguments mutually exclusive"),
+    }
+}
+
+/// Execute a closure with a policy session.
+pub fn execute_with_policy_session<F, T>(
+    ctx: &mut tss_esapi::Context,
+    session_path: &Path,
+    f: F,
+) -> anyhow::Result<T>
+where
+    F: FnOnce(&mut tss_esapi::Context) -> tss_esapi::Result<T>,
+{
+    execute_with_optional_session_type(ctx, Some(session_path), SessionType::Policy, f)
+}
+
+fn execute_with_optional_session_type<F, T>(
+    ctx: &mut tss_esapi::Context,
+    session_path: Option<&Path>,
+    session_type: SessionType,
+    f: F,
+) -> anyhow::Result<T>
+where
+    F: FnOnce(&mut tss_esapi::Context) -> tss_esapi::Result<T>,
+{
+    let Some(path) = session_path else {
+        return execute_with_command_session(ctx, None, f);
+    };
+
+    let session = load_session_from_file(ctx, path, session_type)?;
+    let session_handle = SessionHandle::from(session);
+    let result = execute_with_command_session(ctx, Some(session), f);
+    ctx.clear_sessions();
+
+    if result.is_ok() {
+        save_session_handle_to_file(ctx, session_handle, path)?;
+    }
+
+    result
+}
+
+/// Save a loaded authorization session for a later CLI invocation.
+pub fn save_session_to_file(
+    ctx: &mut tss_esapi::Context,
+    session: AuthSession,
+    path: &Path,
+) -> anyhow::Result<()> {
+    save_session_handle_to_file(ctx, SessionHandle::from(session), path)
+}
+
+fn save_session_handle_to_file(
+    ctx: &mut tss_esapi::Context,
+    session_handle: SessionHandle,
+    path: &Path,
+) -> anyhow::Result<()> {
+    let saved = ctx
+        .context_save(session_handle.into())
+        .context("context_save (session) failed")?;
+    let json = serde_json::to_string(&saved)?;
+    std::fs::write(path, json).with_context(|| format!("saving session to {}", path.display()))?;
+    Ok(())
 }
 
 /// Start a policy session and satisfy `PolicySecret(TPM_RH_ENDORSEMENT)`.

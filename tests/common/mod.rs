@@ -14,6 +14,8 @@ use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tempfile::TempDir;
+use tss_esapi::structures::Public;
+use tss_esapi::traits::Marshall;
 
 /// Maximum number of swtpm startup attempts before giving up.
 const MAX_SWTPM_RETRIES: usize = 5;
@@ -253,6 +255,20 @@ impl SwtpmSession {
         ctx
     }
 
+    /// Create a primary object from an explicitly constructed public template.
+    pub fn create_primary_from_public(&self, name: &str, public: &Public) -> std::path::PathBuf {
+        let template = self.write_public_template(&format!("{name}.template"), public);
+        let context = self.tmp.path().join(format!("{name}.ctx"));
+        self.cmd("createprimary")
+            .arg("--template")
+            .arg(template)
+            .arg("--context")
+            .arg(&context)
+            .assert()
+            .success();
+        context
+    }
+
     /// Helper: create a child signing key and load it.
     /// Returns (ctx_path, pub_path, priv_path).
     pub fn create_and_load_signing_key(
@@ -290,6 +306,182 @@ impl SwtpmSession {
         (ctx_path, pub_path, priv_path)
     }
 
+    /// Create the EK and AK files required by credential activation commands.
+    pub fn create_credential_keys(
+        &self,
+    ) -> (
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    ) {
+        let ek_context = self.tmp.path().join("ek.ctx");
+        let ek_public = self.tmp.path().join("ek.pub");
+        self.cmd("createek")
+            .args(["-G", "rsa", "-c"])
+            .arg(&ek_context)
+            .arg("-u")
+            .arg(&ek_public)
+            .assert()
+            .success();
+
+        self.flush_transient();
+
+        let ak_context = self.tmp.path().join("ak.ctx");
+        let ak_public = self.tmp.path().join("ak.pub");
+        let ak_private = self.tmp.path().join("ak.priv");
+        let ak_name = self.tmp.path().join("ak.name");
+        self.cmd("createak")
+            .arg("-C")
+            .arg(Self::file_ref(&ek_context))
+            .arg("-c")
+            .arg(&ak_context)
+            .args(["-G", "rsa", "-g", "sha256", "-u"])
+            .arg(&ak_public)
+            .arg("-r")
+            .arg(&ak_private)
+            .arg("-n")
+            .arg(&ak_name)
+            .assert()
+            .success();
+
+        (ek_context, ek_public, ak_context, ak_name)
+    }
+
+    /// Create and load a child object from an explicitly constructed public template.
+    pub fn create_and_load_from_public(
+        &self,
+        parent_ctx: &std::path::Path,
+        name: &str,
+        public: &Public,
+        sensitive_data: Option<&[u8]>,
+    ) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let template = self.write_public_template(&format!("{name}.template"), public);
+        let priv_path = self.tmp.path().join(format!("{name}.priv"));
+        let pub_path = self.tmp.path().join(format!("{name}.pub"));
+        let ctx_path = self.tmp.path().join(format!("{name}.ctx"));
+
+        let mut create = self.cmd("create");
+        create
+            .arg("-C")
+            .arg(Self::file_ref(parent_ctx))
+            .arg("--template")
+            .arg(template)
+            .arg("-r")
+            .arg(&priv_path)
+            .arg("-u")
+            .arg(&pub_path);
+        if let Some(data) = sensitive_data {
+            let path = self.write_tmp_file(&format!("{name}.sensitive"), data);
+            create.arg("--seal-data").arg(path);
+        }
+        create.assert().success();
+
+        self.cmd("load")
+            .arg("-C")
+            .arg(Self::file_ref(parent_ctx))
+            .arg("-r")
+            .arg(&priv_path)
+            .arg("-u")
+            .arg(&pub_path)
+            .arg("-c")
+            .arg(&ctx_path)
+            .assert()
+            .success();
+
+        (ctx_path, pub_path, priv_path)
+    }
+
+    /// Create an object and policy session authorizing duplication to one parent.
+    pub fn create_object_for_duplication(
+        &self,
+        original_parent: &std::path::Path,
+        new_parent: &std::path::Path,
+        name: &str,
+    ) -> (
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    ) {
+        let parent_name = self.read_object_name(new_parent, &format!("{name}.parent-name"));
+        let empty_name = self.write_tmp_file(&format!("{name}.empty-name"), &[]);
+        let trial = self.tmp.path().join(format!("{name}.trial.ctx"));
+        let policy = self.tmp.path().join(format!("{name}.policy"));
+        self.cmd("startauthsession")
+            .arg("-S")
+            .arg(&trial)
+            .assert()
+            .success();
+        self.cmd("policyduplicationselect")
+            .arg("-S")
+            .arg(&trial)
+            .arg("-n")
+            .arg(&empty_name)
+            .arg("-N")
+            .arg(&parent_name)
+            .arg("-L")
+            .arg(&policy)
+            .assert()
+            .success();
+        let policy = tss_esapi::structures::Digest::try_from(self.read_file(&policy))
+            .expect("invalid duplication policy digest");
+        let (object, public, _) = self.create_and_load_from_public(
+            original_parent,
+            name,
+            &duplicable_ecc_public_with_auth_policy(policy),
+            None,
+        );
+        let object_name = self.read_object_name(&object, &format!("{name}.object-name"));
+
+        let session = self.tmp.path().join(format!("{name}.policy.ctx"));
+        self.cmd("startauthsession")
+            .args(["--policy-session", "-S"])
+            .arg(&session)
+            .assert()
+            .success();
+        self.cmd("policyduplicationselect")
+            .arg("-S")
+            .arg(&session)
+            .arg("-n")
+            .arg(&object_name)
+            .arg("-N")
+            .arg(&parent_name)
+            .assert()
+            .success();
+
+        (object, public, object_name, session)
+    }
+
+    /// Write a marshalled public template for a command accepting `--template`.
+    pub fn write_public_template(&self, name: &str, public: &Public) -> std::path::PathBuf {
+        let bytes = public
+            .marshall()
+            .expect("failed to marshal public template");
+        self.write_tmp_file(name, &bytes)
+    }
+
+    /// Read an object's TPM name through the CLI and store its binary representation.
+    pub fn read_object_name(
+        &self,
+        object_context: &std::path::Path,
+        name: &str,
+    ) -> std::path::PathBuf {
+        let assertion = self
+            .cmd("readpublic")
+            .arg("-c")
+            .arg(Self::file_ref(object_context))
+            .assert()
+            .success();
+        let stdout = String::from_utf8_lossy(&assertion.get_output().stdout);
+        let name_hex = stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("name: 0x"))
+            .expect("readpublic output did not contain the object name");
+        let value = hex::decode(name_hex).expect("readpublic returned a non-hex object name");
+        self.write_tmp_file(name, &value)
+    }
+
     /// Helper: write binary data to a file in the temp directory.
     pub fn write_tmp_file(&self, name: &str, data: &[u8]) -> std::path::PathBuf {
         let path = self.tmp.path().join(name);
@@ -325,6 +517,255 @@ impl SwtpmSession {
         f.write_all(&[0xff, 0xff, 0xff, 0xff]).unwrap();
         dest
     }
+}
+
+pub fn unrestricted_rsa_decryption_public() -> Public {
+    use tss_esapi::interface_types::key_bits::RsaKeyBits;
+    use tss_esapi::structures::RsaExponent;
+    use tss_esapi::utils::create_unrestricted_encryption_decryption_rsa_public;
+
+    create_unrestricted_encryption_decryption_rsa_public(
+        RsaKeyBits::Rsa2048,
+        RsaExponent::default(),
+    )
+    .expect("failed to build unrestricted RSA decryption public area")
+}
+
+pub fn ecdh_public() -> Public {
+    use tss_esapi::attributes::ObjectAttributesBuilder;
+    use tss_esapi::interface_types::{
+        algorithm::{HashingAlgorithm, PublicAlgorithm},
+        ecc::EccCurve,
+    };
+    use tss_esapi::structures::{
+        EccPoint, EccScheme, HashScheme, KeyDerivationFunctionScheme, PublicBuilder,
+        PublicEccParametersBuilder,
+    };
+
+    let parameters = PublicEccParametersBuilder::new()
+        .with_ecc_scheme(EccScheme::EcDh(HashScheme::new(HashingAlgorithm::Sha256)))
+        .with_curve(EccCurve::NistP256)
+        .with_is_signing_key(false)
+        .with_is_decryption_key(true)
+        .with_restricted(false)
+        .with_key_derivation_function_scheme(KeyDerivationFunctionScheme::Null)
+        .build()
+        .expect("failed to build ECDH parameters");
+    let attributes = ObjectAttributesBuilder::new()
+        .with_fixed_tpm(true)
+        .with_fixed_parent(true)
+        .with_sensitive_data_origin(true)
+        .with_user_with_auth(true)
+        .with_decrypt(true)
+        .with_sign_encrypt(false)
+        .with_restricted(false)
+        .build()
+        .expect("failed to build ECDH attributes");
+    PublicBuilder::new()
+        .with_public_algorithm(PublicAlgorithm::Ecc)
+        .with_name_hashing_algorithm(HashingAlgorithm::Sha256)
+        .with_object_attributes(attributes)
+        .with_ecc_parameters(parameters)
+        .with_ecc_unique_identifier(EccPoint::default())
+        .build()
+        .expect("failed to build ECDH public area")
+}
+
+pub fn symmetric_cipher_public() -> Public {
+    use tss_esapi::attributes::ObjectAttributesBuilder;
+    use tss_esapi::interface_types::algorithm::{HashingAlgorithm, PublicAlgorithm};
+    use tss_esapi::structures::{
+        Digest, PublicBuilder, SymmetricCipherParameters, SymmetricDefinitionObject,
+    };
+
+    let attributes = ObjectAttributesBuilder::new()
+        .with_user_with_auth(true)
+        .with_decrypt(true)
+        .with_sign_encrypt(true)
+        .build()
+        .expect("failed to build symmetric key attributes");
+    PublicBuilder::new()
+        .with_public_algorithm(PublicAlgorithm::SymCipher)
+        .with_name_hashing_algorithm(HashingAlgorithm::Sha256)
+        .with_object_attributes(attributes)
+        .with_symmetric_cipher_parameters(SymmetricCipherParameters::new(
+            SymmetricDefinitionObject::AES_128_CFB,
+        ))
+        .with_symmetric_cipher_unique_identifier(Digest::default())
+        .build()
+        .expect("failed to build symmetric cipher public area")
+}
+
+pub fn ecdaa_public() -> Public {
+    use tss_esapi::attributes::ObjectAttributesBuilder;
+    use tss_esapi::interface_types::{
+        algorithm::{HashingAlgorithm, PublicAlgorithm},
+        ecc::EccCurve,
+    };
+    use tss_esapi::structures::{
+        EcDaaScheme, EccPoint, EccScheme, KeyDerivationFunctionScheme, PublicBuilder,
+        PublicEccParametersBuilder,
+    };
+
+    let parameters = PublicEccParametersBuilder::new()
+        .with_ecc_scheme(EccScheme::EcDaa(EcDaaScheme::new(
+            HashingAlgorithm::Sha256,
+            0,
+        )))
+        .with_curve(EccCurve::BnP256)
+        .with_is_signing_key(true)
+        .with_is_decryption_key(false)
+        .with_restricted(false)
+        .with_key_derivation_function_scheme(KeyDerivationFunctionScheme::Null)
+        .build()
+        .expect("failed to build ECDAA parameters");
+    let attributes = ObjectAttributesBuilder::new()
+        .with_fixed_tpm(true)
+        .with_fixed_parent(true)
+        .with_sensitive_data_origin(true)
+        .with_user_with_auth(true)
+        .with_decrypt(false)
+        .with_sign_encrypt(true)
+        .with_restricted(false)
+        .build()
+        .expect("failed to build ECDAA attributes");
+    PublicBuilder::new()
+        .with_public_algorithm(PublicAlgorithm::Ecc)
+        .with_name_hashing_algorithm(HashingAlgorithm::Sha256)
+        .with_object_attributes(attributes)
+        .with_ecc_parameters(parameters)
+        .with_ecc_unique_identifier(EccPoint::default())
+        .build()
+        .expect("failed to build ECDAA public area")
+}
+
+pub fn ecc_signing_public_with_admin_policy(policy: tss_esapi::structures::Digest) -> Public {
+    use tss_esapi::attributes::ObjectAttributesBuilder;
+    use tss_esapi::interface_types::{
+        algorithm::{HashingAlgorithm, PublicAlgorithm},
+        ecc::EccCurve,
+    };
+    use tss_esapi::structures::{
+        EccPoint, EccScheme, HashScheme, KeyDerivationFunctionScheme, PublicBuilder,
+        PublicEccParametersBuilder,
+    };
+
+    let attributes = ObjectAttributesBuilder::new()
+        .with_fixed_tpm(true)
+        .with_fixed_parent(true)
+        .with_sensitive_data_origin(true)
+        .with_admin_with_policy(true)
+        .with_sign_encrypt(true)
+        .build()
+        .expect("failed to build policy-authorized ECC signing attributes");
+    let parameters = PublicEccParametersBuilder::new()
+        .with_ecc_scheme(EccScheme::EcDsa(HashScheme::new(HashingAlgorithm::Sha256)))
+        .with_curve(EccCurve::NistP256)
+        .with_is_signing_key(true)
+        .with_is_decryption_key(false)
+        .with_restricted(false)
+        .with_key_derivation_function_scheme(KeyDerivationFunctionScheme::Null)
+        .build()
+        .expect("failed to build policy-authorized ECC signing parameters");
+
+    PublicBuilder::new()
+        .with_public_algorithm(PublicAlgorithm::Ecc)
+        .with_name_hashing_algorithm(HashingAlgorithm::Sha256)
+        .with_object_attributes(attributes)
+        .with_auth_policy(policy)
+        .with_ecc_parameters(parameters)
+        .with_ecc_unique_identifier(EccPoint::default())
+        .build()
+        .expect("failed to build policy-authorized ECC signing public area")
+}
+
+pub fn x509_signing_public() -> Public {
+    use tss_esapi::attributes::ObjectAttributesBuilder;
+    use tss_esapi::interface_types::{
+        algorithm::{HashingAlgorithm, PublicAlgorithm, RsaSchemeAlgorithm},
+        key_bits::RsaKeyBits,
+    };
+    use tss_esapi::structures::{
+        PublicBuilder, PublicKeyRsa, PublicRsaParametersBuilder, RsaExponent, RsaScheme,
+    };
+
+    let attributes = ObjectAttributesBuilder::new()
+        .with_fixed_tpm(true)
+        .with_fixed_parent(true)
+        .with_sensitive_data_origin(true)
+        .with_user_with_auth(true)
+        .with_sign_encrypt(true)
+        .with_restricted(true)
+        .with_x509_sign(true)
+        .build()
+        .expect("failed to build X.509 signing attributes");
+    let parameters = PublicRsaParametersBuilder::new()
+        .with_scheme(
+            RsaScheme::create(RsaSchemeAlgorithm::RsaSsa, Some(HashingAlgorithm::Sha256))
+                .expect("failed to build X.509 signing scheme"),
+        )
+        .with_key_bits(RsaKeyBits::Rsa2048)
+        .with_exponent(RsaExponent::default())
+        .with_is_signing_key(true)
+        .with_is_decryption_key(false)
+        .with_restricted(true)
+        .build()
+        .expect("failed to build X.509 signing parameters");
+    PublicBuilder::new()
+        .with_public_algorithm(PublicAlgorithm::Rsa)
+        .with_name_hashing_algorithm(HashingAlgorithm::Sha256)
+        .with_object_attributes(attributes)
+        .with_rsa_parameters(parameters)
+        .with_rsa_unique_identifier(PublicKeyRsa::default())
+        .build()
+        .expect("failed to build X.509 signing public area")
+}
+
+pub fn duplicable_ecc_public_with_auth_policy(policy: tss_esapi::structures::Digest) -> Public {
+    duplicable_ecc_public_with_policy(Some(policy))
+}
+
+fn duplicable_ecc_public_with_policy(policy: Option<tss_esapi::structures::Digest>) -> Public {
+    use tss_esapi::attributes::ObjectAttributesBuilder;
+    use tss_esapi::interface_types::{
+        algorithm::{HashingAlgorithm, PublicAlgorithm},
+        ecc::EccCurve,
+    };
+    use tss_esapi::structures::{
+        EccPoint, EccScheme, KeyDerivationFunctionScheme, PublicBuilder, PublicEccParametersBuilder,
+    };
+
+    let attributes = ObjectAttributesBuilder::new()
+        .with_fixed_tpm(false)
+        .with_fixed_parent(false)
+        .with_sensitive_data_origin(true)
+        .with_user_with_auth(true)
+        .with_decrypt(true)
+        .with_sign_encrypt(true)
+        .with_restricted(false)
+        .build()
+        .expect("failed to build duplicable object attributes");
+    let parameters = PublicEccParametersBuilder::new()
+        .with_ecc_scheme(EccScheme::Null)
+        .with_curve(EccCurve::NistP256)
+        .with_is_signing_key(false)
+        .with_is_decryption_key(true)
+        .with_restricted(false)
+        .with_key_derivation_function_scheme(KeyDerivationFunctionScheme::Null)
+        .build()
+        .expect("failed to build duplicable ECC parameters");
+    let mut builder = PublicBuilder::new()
+        .with_public_algorithm(PublicAlgorithm::Ecc)
+        .with_name_hashing_algorithm(HashingAlgorithm::Sha256)
+        .with_object_attributes(attributes)
+        .with_ecc_parameters(parameters)
+        .with_ecc_unique_identifier(EccPoint::default());
+    if let Some(policy) = policy {
+        builder = builder.with_auth_policy(policy);
+    }
+    builder
+        .build()
+        .expect("failed to build duplicable ECC public area")
 }
 
 impl Drop for SwtpmSession {

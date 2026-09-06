@@ -57,6 +57,14 @@ pub struct CreatePrimaryCmd {
     #[arg(short = 'c', long = "context")]
     pub context: Option<PathBuf>,
 
+    /// Output file for the creation hash
+    #[arg(long = "creation-hash")]
+    pub creation_hash: Option<PathBuf>,
+
+    /// Output file for the creation ticket
+    #[arg(long = "creation-ticket")]
+    pub creation_ticket: Option<PathBuf>,
+
     /// RSA key size in bits
     #[arg(long = "key-size", default_value = "2048", value_parser = parse::parse_rsa_key_bits)]
     pub key_size: RsaKeyBits,
@@ -122,6 +130,18 @@ impl CreatePrimaryCmd {
             let json = serde_json::to_string(&saved)?;
             std::fs::write(path, json)?;
             info!("context saved to {}", path.display());
+        }
+
+        if let Some(ref path) = self.creation_hash {
+            std::fs::write(path, result.creation_hash.as_bytes())?;
+            info!("creation hash saved to {}", path.display());
+        }
+        if let Some(ref path) = self.creation_ticket {
+            std::fs::write(
+                path,
+                crate::ticket::marshall_ticket(&result.creation_ticket),
+            )?;
+            info!("creation ticket saved to {}", path.display());
         }
 
         Ok(())

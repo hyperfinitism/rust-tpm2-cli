@@ -14,7 +14,9 @@ use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source, load_object_from_source};
 use crate::output;
 use crate::parse::{self, parse_context_source};
-use crate::session::load_optional_auth_session;
+use crate::session::{
+    load_optional_auth_session, load_optional_policy_or_hmac_session, save_session_to_file,
+};
 #[derive(Parser)]
 pub struct CertifyX509Cmd {
     /// Object context (file:<path> or hex:<handle>)
@@ -57,9 +59,13 @@ pub struct CertifyX509Cmd {
     #[arg(short = 's', long = "signature")]
     pub signature: Option<PathBuf>,
 
-    /// Session context file for object authorization
-    #[arg(short = 'S', long = "session")]
+    /// HMAC session context file for object authorization
+    #[arg(short = 'S', long = "session", conflicts_with = "policy_session")]
     pub session: Option<PathBuf>,
+
+    /// Policy session context file for object authorization
+    #[arg(long = "policy-session", conflicts_with = "session")]
+    pub policy_session: Option<PathBuf>,
 
     /// Session context file for signing key authorization
     #[arg(long = "signing-session")]
@@ -89,11 +95,15 @@ impl CertifyX509Cmd {
         })?;
         let partial = MaxBuffer::try_from(partial)
             .map_err(|e| anyhow::anyhow!("partial certificate too large: {e}"))?;
-        let first_session = load_optional_auth_session(&mut ctx, self.session.as_deref())?;
+        let first_session = load_optional_policy_or_hmac_session(
+            &mut ctx,
+            self.policy_session.as_deref(),
+            self.session.as_deref(),
+        )?;
         let second_session = load_optional_auth_session(&mut ctx, self.signing_session.as_deref())?;
 
         ctx.set_sessions((Some(first_session), Some(second_session), None));
-        let (added, digest, signature) = ctx
+        let result = ctx
             .certify_x509(
                 object,
                 signing_key,
@@ -101,8 +111,16 @@ impl CertifyX509Cmd {
                 self.scheme.with_hash(self.hash_algorithm),
                 partial,
             )
-            .context("TPM2_CertifyX509 failed")?;
+            .map_err(|e| anyhow::anyhow!(e));
         ctx.clear_sessions();
+        let (added, digest, signature) = result.context("TPM2_CertifyX509 failed")?;
+
+        if let Some(path) = self.policy_session.as_deref().or(self.session.as_deref()) {
+            save_session_to_file(&mut ctx, first_session, path)?;
+        }
+        if let Some(path) = self.signing_session.as_deref() {
+            save_session_to_file(&mut ctx, second_session, path)?;
+        }
 
         if let Some(path) = &self.added_to_certificate {
             output::write_to_file(path, added.as_bytes())?;

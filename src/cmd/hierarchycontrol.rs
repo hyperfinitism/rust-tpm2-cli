@@ -22,7 +22,14 @@ pub struct HierarchyControlCmd {
     pub auth: Option<Auth>,
 
     /// Set state (true=enable, false=disable)
-    #[arg(short = 's', long = "state", default_value = "true")]
+    #[arg(
+        short = 's',
+        long = "state",
+        default_value = "true",
+        default_missing_value = "true",
+        num_args = 0..=1,
+        require_equals = true
+    )]
     pub state: bool,
 
     /// Session context file for authorization

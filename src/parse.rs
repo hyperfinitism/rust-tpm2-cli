@@ -1414,6 +1414,31 @@ mod tests {
     }
 
     #[test]
+    fn context_source_requires_an_explicit_namespace() {
+        assert!(matches!(
+            parse_context_source("file:object.ctx"),
+            Ok(ContextSource::File(_))
+        ));
+        assert!(parse_context_source("object.ctx").is_err());
+    }
+
+    #[test]
+    fn typed_handle_parsers_enforce_handle_namespaces() {
+        assert!(parse_nv_index("0x01000000").is_ok());
+        assert!(parse_nv_index("0x81000000").is_err());
+        assert!(parse_persistent_handle("0x81000000").is_ok());
+        assert!(parse_persistent_handle("0x01000000").is_err());
+    }
+
+    #[test]
+    fn key_algorithm_and_size_are_parsed_to_tpm_types() {
+        assert_eq!(parse_create_algorithm("ecc").unwrap(), CreateAlgorithm::Ecc);
+        assert!(parse_create_algorithm("symmetric").is_err());
+        assert_eq!(parse_rsa_key_bits("2048").unwrap(), RsaKeyBits::Rsa2048);
+        assert!(parse_rsa_key_bits("1234").is_err());
+    }
+
+    #[test]
     fn typed_hex_structures_reject_bad_hex() {
         assert!(parse_hex_digest("00ff").is_ok());
         assert!(parse_hex_digest("xyz").is_err());

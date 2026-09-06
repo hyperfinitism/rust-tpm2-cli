@@ -13,7 +13,9 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source, load_object_from_source};
 use crate::parse::{self, parse_context_source};
-use crate::session::load_optional_auth_session;
+use crate::session::{
+    load_optional_auth_session, load_optional_policy_or_hmac_session, save_session_to_file,
+};
 #[derive(Parser)]
 pub struct CertifyCmd {
     /// Object to certify (file:<path> or hex:<handle>)
@@ -52,9 +54,13 @@ pub struct CertifyCmd {
     #[arg(short = 's', long = "signature")]
     pub signature: Option<PathBuf>,
 
-    /// Session context file for authorization
-    #[arg(short = 'S', long = "session")]
+    /// HMAC session context file for certified object authorization
+    #[arg(short = 'S', long = "session", conflicts_with = "policy_session")]
     pub session: Option<PathBuf>,
+
+    /// Policy session context file for certified object authorization
+    #[arg(long = "policy-session", conflicts_with = "session")]
+    pub policy_session: Option<PathBuf>,
 
     /// Session context file for signing key authorization
     #[arg(long = "signing-session")]
@@ -83,7 +89,11 @@ impl CertifyCmd {
                 .map_err(|e| anyhow::anyhow!("qualifying data: {e}"))?,
             None => Data::default(),
         };
-        let object_session = load_optional_auth_session(&mut ctx, self.session.as_deref())?;
+        let object_session = load_optional_policy_or_hmac_session(
+            &mut ctx,
+            self.policy_session.as_deref(),
+            self.session.as_deref(),
+        )?;
         let signing_session =
             load_optional_auth_session(&mut ctx, self.signing_session.as_deref())?;
         ctx.set_sessions((Some(object_session), Some(signing_session), None));
@@ -92,6 +102,13 @@ impl CertifyCmd {
             .map_err(|e| anyhow::anyhow!(e));
         ctx.clear_sessions();
         let (attest, signature) = result.context("TPM2_Certify failed")?;
+
+        if let Some(path) = self.policy_session.as_deref().or(self.session.as_deref()) {
+            save_session_to_file(&mut ctx, object_session, path)?;
+        }
+        if let Some(path) = self.signing_session.as_deref() {
+            save_session_to_file(&mut ctx, signing_session, path)?;
+        }
 
         if let Some(ref path) = self.attestation {
             let bytes = attest.marshall().context("failed to marshal TPMS_ATTEST")?;

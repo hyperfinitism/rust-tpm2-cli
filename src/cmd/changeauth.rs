@@ -12,7 +12,7 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_object_from_source};
 use crate::parse::{self, parse_context_source};
-use crate::session::execute_with_optional_session;
+use crate::session::execute_with_optional_policy_or_hmac_session;
 #[derive(Parser)]
 #[command(group(
     ArgGroup::new("target")
@@ -45,9 +45,13 @@ pub struct ChangeAuthCmd {
     #[arg(short = 'o', long = "output")]
     pub output: Option<PathBuf>,
 
-    /// Session context file for authorization
-    #[arg(short = 'S', long = "session")]
+    /// HMAC session context file for authorization
+    #[arg(short = 'S', long = "session", conflicts_with = "policy_session")]
     pub session: Option<PathBuf>,
+
+    /// Policy session context file for authorization
+    #[arg(long = "policy-session", conflicts_with = "session")]
+    pub policy_session: Option<PathBuf>,
 }
 
 impl ChangeAuthCmd {
@@ -60,10 +64,12 @@ impl ChangeAuthCmd {
                     .context("tr_set_auth failed")?;
             }
 
-            let session_path = self.session.as_deref();
-            execute_with_optional_session(&mut ctx, session_path, |ctx| {
-                ctx.hierarchy_change_auth(auth_handle, self.new_auth.clone())
-            })
+            execute_with_optional_policy_or_hmac_session(
+                &mut ctx,
+                self.policy_session.as_deref(),
+                self.session.as_deref(),
+                |ctx| ctx.hierarchy_change_auth(auth_handle, self.new_auth.clone()),
+            )
             .context("TPM2_HierarchyChangeAuth failed")?;
 
             info!("hierarchy auth changed");
@@ -84,10 +90,12 @@ impl ChangeAuthCmd {
                     .context("tr_set_auth failed")?;
             }
 
-            let session_path = self.session.as_deref();
-            let new_private = execute_with_optional_session(&mut ctx, session_path, |ctx| {
-                ctx.object_change_auth(object_handle, parent_handle, self.new_auth.clone())
-            })
+            let new_private = execute_with_optional_policy_or_hmac_session(
+                &mut ctx,
+                self.policy_session.as_deref(),
+                self.session.as_deref(),
+                |ctx| ctx.object_change_auth(object_handle, parent_handle, self.new_auth.clone()),
+            )
             .context("TPM2_ObjectChangeAuth failed")?;
 
             if let Some(ref path) = self.output {
