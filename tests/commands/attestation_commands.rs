@@ -119,8 +119,53 @@ mod getcommandauditdigest {
 }
 
 mod certify {
+    use std::path::PathBuf;
+
     use crate::common::{SwtpmSession, ecc_signing_public_with_admin_policy};
     use tss_esapi::structures::Digest;
+
+    fn setup_policy_authorization(s: &SwtpmSession) -> (PathBuf, PathBuf, PathBuf) {
+        let trial = s.tmp().path().join("certify-trial.ctx");
+        let policy_digest = s.tmp().path().join("certify.policy");
+        s.cmd("startauthsession")
+            .arg("-S")
+            .arg(&trial)
+            .assert()
+            .success();
+        s.cmd("policycommandcode")
+            .arg("-S")
+            .arg(&trial)
+            .arg("0x148")
+            .arg("-L")
+            .arg(&policy_digest)
+            .assert()
+            .success();
+
+        let primary = s.create_primary_rsa("policy-primary");
+        let policy = Digest::try_from(s.read_file(&policy_digest)).unwrap();
+        let (target, _, _) = s.create_and_load_from_public(
+            &primary,
+            "policy-target",
+            &ecc_signing_public_with_admin_policy(policy),
+            None,
+        );
+        let (signer, _, _) = s.create_and_load_signing_key(&primary, "rsa", "policy-signer");
+
+        let policy_session = s.tmp().path().join("certify-policy.ctx");
+        s.cmd("startauthsession")
+            .args(["--policy-session", "-S"])
+            .arg(&policy_session)
+            .assert()
+            .success();
+        s.cmd("policycommandcode")
+            .arg("-S")
+            .arg(&policy_session)
+            .arg("0x148")
+            .assert()
+            .success();
+
+        (target, signer, policy_session)
+    }
 
     #[test]
     fn certify_object() {
@@ -172,46 +217,23 @@ mod certify {
     #[test]
     fn certify_accepts_a_policy_session_for_admin_authorization() {
         let s = SwtpmSession::new();
-        let trial = s.tmp().path().join("certify-trial.ctx");
-        let policy_digest = s.tmp().path().join("certify.policy");
-        s.cmd("startauthsession")
-            .arg("-S")
-            .arg(&trial)
-            .assert()
-            .success();
-        s.cmd("policycommandcode")
-            .arg("-S")
-            .arg(&trial)
-            .arg("0x148")
-            .arg("-L")
-            .arg(&policy_digest)
-            .assert()
-            .success();
+        let (target, signer, policy_session) = setup_policy_authorization(&s);
 
-        let primary = s.create_primary_rsa("policy-primary");
-        let policy = Digest::try_from(s.read_file(&policy_digest)).unwrap();
-        let (target, _, _) = s.create_and_load_from_public(
-            &primary,
-            "policy-target",
-            &ecc_signing_public_with_admin_policy(policy),
-            None,
-        );
-        let (signer, _, _) = s.create_and_load_signing_key(&primary, "rsa", "policy-signer");
-
-        let policy_session = s.tmp().path().join("certify-policy.ctx");
-        s.cmd("startauthsession")
-            .args(["--policy-session", "-S"])
+        s.cmd("certify")
+            .arg("-c")
+            .arg(SwtpmSession::file_ref(&target))
+            .arg("-C")
+            .arg(SwtpmSession::file_ref(&signer))
+            .arg("--policy-session")
             .arg(&policy_session)
             .assert()
             .success();
+    }
 
-        s.cmd("policycommandcode")
-            .arg("-S")
-            .arg(&policy_session)
-            .arg("0x148")
-            .assert()
-            .success();
-
+    #[test]
+    fn certify_saves_a_supplied_policy_session_for_reuse() {
+        let s = SwtpmSession::new();
+        let (target, signer, policy_session) = setup_policy_authorization(&s);
         s.cmd("certify")
             .arg("-c")
             .arg(SwtpmSession::file_ref(&target))
@@ -280,7 +302,17 @@ mod certifycreation {
 }
 
 mod certifyx509 {
+    use std::path::PathBuf;
+
     use crate::common::{SwtpmSession, x509_signing_public};
+
+    fn setup_objects(s: &SwtpmSession) -> (PathBuf, PathBuf, PathBuf) {
+        let object = s.create_primary_from_public("x509-object", &x509_signing_public());
+        let signing_key = s.create_primary_from_public("x509-signer", &x509_signing_public());
+        let partial = s.write_tmp_file("partial-certificate.der", &partial_certificate());
+
+        (object, signing_key, partial)
+    }
 
     fn der(tag: u8, value: &[u8]) -> Vec<u8> {
         assert!(value.len() <= u8::MAX as usize);
@@ -352,18 +384,10 @@ mod certifyx509 {
     #[test]
     fn certifyx509_outputs_certificate_components() {
         let s = SwtpmSession::new();
-        let object = s.create_primary_from_public("x509-object", &x509_signing_public());
-        let signing_key = s.create_primary_from_public("x509-signer", &x509_signing_public());
-        let partial = s.write_tmp_file("partial-certificate.der", &partial_certificate());
+        let (object, signing_key, partial) = setup_objects(&s);
         let added = s.tmp().path().join("added-certificate.der");
         let digest = s.tmp().path().join("tbs-digest.bin");
         let signature = s.tmp().path().join("certificate-signature.bin");
-        let command_session = s.tmp().path().join("certify-x509-command-session.ctx");
-        s.cmd("startauthsession")
-            .args(["--hmac-session", "-S"])
-            .arg(&command_session)
-            .assert()
-            .success();
 
         s.cmd("certifyx509")
             .arg("-c")
@@ -378,14 +402,36 @@ mod certifyx509 {
             .arg(&digest)
             .arg("-s")
             .arg(&signature)
-            .arg("--session")
-            .arg(&command_session)
             .assert()
             .success();
 
         assert!(std::fs::metadata(added).unwrap().len() > 0);
         assert_eq!(std::fs::metadata(digest).unwrap().len(), 32);
         assert!(std::fs::metadata(signature).unwrap().len() > 0);
+    }
+
+    #[test]
+    fn certifyx509_saves_a_supplied_session_for_reuse() {
+        let s = SwtpmSession::new();
+        let (object, signing_key, partial) = setup_objects(&s);
+        let command_session = s.tmp().path().join("certify-x509-command-session.ctx");
+        s.cmd("startauthsession")
+            .args(["--hmac-session", "-S"])
+            .arg(&command_session)
+            .assert()
+            .success();
+
+        s.cmd("certifyx509")
+            .arg("-c")
+            .arg(SwtpmSession::file_ref(&object))
+            .arg("-C")
+            .arg(SwtpmSession::file_ref(&signing_key))
+            .arg("-i")
+            .arg(&partial)
+            .arg("--session")
+            .arg(&command_session)
+            .assert()
+            .success();
 
         s.cmd("pcrreset")
             .arg("16")
