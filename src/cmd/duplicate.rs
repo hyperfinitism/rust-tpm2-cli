@@ -11,7 +11,7 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::{ContextSource, load_object_from_source};
 use crate::parse::{self, parse_context_source};
-use crate::session::execute_with_optional_session;
+use crate::session::execute_with_policy_session;
 #[derive(Parser)]
 #[command(group(
     ArgGroup::new("parent")
@@ -56,9 +56,9 @@ pub struct DuplicateCmd {
     #[arg(short = 's', long = "encrypted-seed")]
     pub encrypted_seed: PathBuf,
 
-    /// Session context file for authorization
-    #[arg(short = 'S', long = "session")]
-    pub session: Option<PathBuf>,
+    /// Policy session context file for object authorization
+    #[arg(short = 'S', long = "policy-session")]
+    pub policy_session: PathBuf,
 }
 
 impl DuplicateCmd {
@@ -94,9 +94,8 @@ impl DuplicateCmd {
             None => None,
         };
 
-        let session_path = self.session.as_deref();
         let (enc_key, duplicate_private, encrypted_secret) =
-            execute_with_optional_session(&mut ctx, session_path, |ctx| {
+            execute_with_policy_session(&mut ctx, &self.policy_session, |ctx| {
                 ctx.duplicate(
                     object_handle,
                     parent_handle,

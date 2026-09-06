@@ -22,7 +22,14 @@ pub struct ClearControlCmd {
     pub auth: Option<Auth>,
 
     /// Set to disable clear (true) or enable clear (false)
-    #[arg(short = 's', long = "disable-clear", default_value = "true")]
+    #[arg(
+        short = 's',
+        long = "disable-clear",
+        default_value = "true",
+        default_missing_value = "true",
+        num_args = 0..=1,
+        require_equals = true
+    )]
     pub disable: bool,
 
     /// Session context file for authorization

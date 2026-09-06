@@ -16,8 +16,8 @@ use crate::context::create_context;
 use crate::handle::{ContextSource, load_key_from_source};
 use crate::parse::{self, parse_context_source};
 use crate::session::{
-    flush_policy_session, load_optional_auth_session, load_session_from_file,
-    start_ek_policy_session,
+    flush_policy_session, load_optional_policy_or_hmac_session, load_session_from_file,
+    save_session_to_file, start_ek_policy_session,
 };
 #[derive(Parser)]
 pub struct ActivateCredentialCmd {
@@ -49,9 +49,13 @@ pub struct ActivateCredentialCmd {
     #[arg(short = 'o', long = "certinfo-data")]
     pub certinfo_data: PathBuf,
 
-    /// Session context file for credentialed key authorization
-    #[arg(short = 'S', long = "session")]
+    /// HMAC session context file for credentialed key authorization
+    #[arg(short = 'S', long = "session", conflicts_with = "policy_session")]
     pub session: Option<PathBuf>,
+
+    /// Policy session context file for credentialed key authorization
+    #[arg(long = "policy-session", conflicts_with = "session")]
+    pub policy_session: Option<PathBuf>,
 }
 
 impl ActivateCredentialCmd {
@@ -71,10 +75,10 @@ impl ActivateCredentialCmd {
             )
         })?;
         let (id_object, encrypted_secret) = parse_credential_blob(&blob)?;
-        let (ek_session, external_session) = match &self.credential_key_auth {
+        let (ek_session, external_session_path) = match &self.credential_key_auth {
             Some(parse::CredentialKeyAuth::Session(path)) => (
                 load_session_from_file(&mut ctx, path, SessionType::Policy)?,
-                true,
+                Some(path.as_path()),
             ),
             auth => {
                 if let Some(parse::CredentialKeyAuth::Auth(auth)) = auth {
@@ -83,19 +87,30 @@ impl ActivateCredentialCmd {
                         .context("failed to set endorsement hierarchy auth")?;
                 }
                 let ps = start_ek_policy_session(&mut ctx)?;
-                (AuthSession::PolicySession(ps), false)
+                (AuthSession::PolicySession(ps), None)
             }
         };
-        let activate_session = load_optional_auth_session(&mut ctx, self.session.as_deref())?;
+        let activate_session = load_optional_policy_or_hmac_session(
+            &mut ctx,
+            self.policy_session.as_deref(),
+            self.session.as_deref(),
+        )?;
         ctx.set_sessions((Some(activate_session), Some(ek_session), None));
-        let cert_info = ctx
+        let result = ctx
             .activate_credential(activate_handle, key_handle, id_object, encrypted_secret)
-            .context("TPM2_ActivateCredential failed")?;
+            .map_err(|e| anyhow::anyhow!(e));
         ctx.clear_sessions();
+        let cert_info = result.context("TPM2_ActivateCredential failed")?;
 
-        if !external_session && let AuthSession::PolicySession(ps) = ek_session {
+        if let Some(path) = self.policy_session.as_deref().or(self.session.as_deref()) {
+            save_session_to_file(&mut ctx, activate_session, path)?;
+        }
+        if let Some(path) = external_session_path {
+            save_session_to_file(&mut ctx, ek_session, path)?;
+        } else if let AuthSession::PolicySession(ps) = ek_session {
             flush_policy_session(&mut ctx, ps)?;
         }
+
         std::fs::write(&self.certinfo_data, cert_info.as_bytes())
             .with_context(|| format!("writing certinfo to {}", self.certinfo_data.display()))?;
         info!("certinfo saved to {}", self.certinfo_data.display());

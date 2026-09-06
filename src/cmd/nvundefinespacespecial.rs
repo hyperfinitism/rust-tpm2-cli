@@ -27,8 +27,8 @@ pub struct NvUndefineSpaceSpecialCmd {
     pub auth: Option<Auth>,
 
     /// Policy session file authorizing the NV index
-    #[arg(short = 'S', long = "session")]
-    pub session: PathBuf,
+    #[arg(short = 'S', long = "policy-session")]
+    pub policy_session: PathBuf,
 
     /// Session context file for platform authorization
     #[arg(long = "platform-session")]
@@ -45,7 +45,7 @@ impl NvUndefineSpaceSpecialCmd {
                 .context("failed to set platform authorization")?;
         }
 
-        let session = load_session_from_file(&mut ctx, &self.session, SessionType::Policy)?;
+        let session = load_session_from_file(&mut ctx, &self.policy_session, SessionType::Policy)?;
         let policy_session = session
             .try_into()
             .map_err(|_| anyhow::anyhow!("expected a policy session"))?;
@@ -62,6 +62,6 @@ impl NvUndefineSpaceSpecialCmd {
 
         info!("NV index 0x{:08x} undefined", u32::from(self.nv_index));
         let handle: ObjectHandle = SessionHandle::from(policy_session).into();
-        save_session_and_forget(ctx, handle, &self.session)
+        save_session_and_forget(ctx, handle, &self.policy_session)
     }
 }

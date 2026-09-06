@@ -6,7 +6,7 @@ use anyhow::Context;
 use clap::Parser;
 use log::info;
 
-use tss_esapi::structures::{Auth, EccParameter, SensitiveData};
+use tss_esapi::structures::{Auth, EccParameter, EccPoint, SensitiveData};
 
 use crate::cli::GlobalOpts;
 use crate::cmd::ecc::{bytes_to_ecc_point, ecc_point_to_bytes};
@@ -74,7 +74,8 @@ impl CommitCmd {
         let p1 = p1
             .map(|data| bytes_to_ecc_point(&data))
             .transpose()
-            .map_err(|e| anyhow::anyhow!("p1 parameter: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("p1 parameter: {e}"))?
+            .unwrap_or_else(EccPoint::default);
         let s2 = s2
             .map(SensitiveData::try_from)
             .transpose()

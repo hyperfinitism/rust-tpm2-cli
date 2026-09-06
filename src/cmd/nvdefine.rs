@@ -8,7 +8,7 @@ use log::info;
 use tss_esapi::attributes::NvIndexAttributes;
 use tss_esapi::handles::NvIndexTpmHandle;
 use tss_esapi::interface_types::algorithm::HashingAlgorithm;
-use tss_esapi::structures::{Auth, NvPublicBuilder};
+use tss_esapi::structures::{Auth, Digest, NvPublicBuilder};
 
 use tss_esapi::interface_types::reserved_handles::Provision;
 
@@ -47,6 +47,10 @@ pub struct NvDefineCmd {
     #[arg(short = 'p', long = "auth", value_parser = parse::parse_auth)]
     pub auth: Option<Auth>,
 
+    /// Authorization policy digest for the NV area
+    #[arg(short = 'L', long = "policy")]
+    pub policy: Option<PathBuf>,
+
     /// Authorization value for the hierarchy
     #[arg(short = 'P', long = "hierarchy-auth", value_parser = parse::parse_auth)]
     pub hierarchy_auth: Option<Auth>,
@@ -68,11 +72,19 @@ impl NvDefineCmd {
                 .context("failed to set hierarchy authorization")?;
         }
 
-        let nv_public = NvPublicBuilder::new()
+        let mut nv_public_builder = NvPublicBuilder::new()
             .with_nv_index(nv_handle)
             .with_index_name_algorithm(self.algorithm)
             .with_index_attributes(self.attributes)
-            .with_data_area_size(self.size as usize)
+            .with_data_area_size(self.size as usize);
+        if let Some(path) = &self.policy {
+            let policy = std::fs::read(path)
+                .with_context(|| format!("reading policy digest from {}", path.display()))?;
+            let policy = Digest::try_from(policy)
+                .map_err(|e| anyhow::anyhow!("invalid policy digest: {e}"))?;
+            nv_public_builder = nv_public_builder.with_index_auth_policy(policy);
+        }
+        let nv_public = nv_public_builder
             .build()
             .context("failed to build NvPublic")?;
 

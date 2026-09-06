@@ -11,7 +11,7 @@ use crate::cli::GlobalOpts;
 use crate::context::create_context;
 use crate::handle::load_nv_index;
 use crate::parse;
-use crate::session::execute_with_optional_session;
+use crate::session::execute_with_policy_session;
 #[derive(Parser)]
 pub struct NvChangeAuthCmd {
     /// NV index handle (hex, e.g. 0x01400001)
@@ -26,9 +26,9 @@ pub struct NvChangeAuthCmd {
     #[arg(short = 'r', long = "new-auth", value_parser = parse::parse_auth)]
     pub new_auth: Auth,
 
-    /// Session context file for authorization
-    #[arg(short = 'S', long = "session")]
-    pub session: Option<PathBuf>,
+    /// Policy session context file for NV index authorization
+    #[arg(short = 'S', long = "policy-session")]
+    pub policy_session: PathBuf,
 }
 
 impl NvChangeAuthCmd {
@@ -41,7 +41,7 @@ impl NvChangeAuthCmd {
                 .context("failed to set NV index authorization")?;
         }
 
-        execute_with_optional_session(&mut ctx, self.session.as_deref(), |ctx| {
+        execute_with_policy_session(&mut ctx, &self.policy_session, |ctx| {
             ctx.nv_change_auth(nv_handle, self.new_auth.clone())
         })
         .context("TPM2_NV_ChangeAuth failed")?;

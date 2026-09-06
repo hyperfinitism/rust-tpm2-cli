@@ -55,6 +55,14 @@ pub struct CreateCmd {
     #[arg(short = 'u', long = "public")]
     pub public_out: Option<PathBuf>,
 
+    /// Output file for the creation hash
+    #[arg(long = "creation-hash")]
+    pub creation_hash_out: Option<PathBuf>,
+
+    /// Output file for the creation ticket
+    #[arg(long = "creation-ticket")]
+    pub creation_ticket_out: Option<PathBuf>,
+
     /// RSA key size in bits
     #[arg(long = "key-size", default_value = "2048", value_parser = parse::parse_rsa_key_bits)]
     pub key_size: RsaKeyBits,
@@ -142,6 +150,19 @@ impl CreateCmd {
                 .context("failed to marshal public")?;
             std::fs::write(path, &pub_bytes)?;
             info!("public portion saved to {}", path.display());
+        }
+
+        if let Some(ref path) = self.creation_hash_out {
+            std::fs::write(path, result.creation_hash.as_bytes())?;
+            info!("creation hash saved to {}", path.display());
+        }
+
+        if let Some(ref path) = self.creation_ticket_out {
+            std::fs::write(
+                path,
+                crate::ticket::marshall_ticket(&result.creation_ticket),
+            )?;
+            info!("creation ticket saved to {}", path.display());
         }
 
         Ok(())
