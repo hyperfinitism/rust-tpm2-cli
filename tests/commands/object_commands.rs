@@ -3,11 +3,11 @@
 //! TPM 2.0 Library Specification, Part 3, Section 12 — Object Commands.
 
 mod activatecredential {
+    use std::path::PathBuf;
+
     use crate::common::SwtpmSession;
 
-    #[test]
-    fn activatecredential_recovers_the_credential() {
-        let s = SwtpmSession::new();
+    fn setup_credential(s: &SwtpmSession) -> (PathBuf, PathBuf, PathBuf) {
         let (ek_context, ek_public, ak_context, ak_name) = s.create_credential_keys();
         let secret = s.write_tmp_file("secret.bin", b"secret credential");
         let credential = s.tmp().path().join("credential.bin");
@@ -23,12 +23,13 @@ mod activatecredential {
             .assert()
             .success();
 
-        let command_session = s.tmp().path().join("activate-command-session.ctx");
-        s.cmd("startauthsession")
-            .args(["--hmac-session", "-S"])
-            .arg(&command_session)
-            .assert()
-            .success();
+        (ek_context, ak_context, credential)
+    }
+
+    #[test]
+    fn activatecredential_recovers_the_credential() {
+        let s = SwtpmSession::new();
+        let (ek_context, ak_context, credential) = setup_credential(&s);
 
         let recovered = s.tmp().path().join("recovered.bin");
         s.cmd("activatecredential")
@@ -40,11 +41,35 @@ mod activatecredential {
             .arg(&credential)
             .arg("-o")
             .arg(&recovered)
+            .assert()
+            .success();
+        assert_eq!(s.read_file(&recovered), b"secret credential");
+    }
+
+    #[test]
+    fn activatecredential_saves_a_supplied_session_for_reuse() {
+        let s = SwtpmSession::new();
+        let (ek_context, ak_context, credential) = setup_credential(&s);
+        let command_session = s.tmp().path().join("activate-command-session.ctx");
+        s.cmd("startauthsession")
+            .args(["--hmac-session", "-S"])
+            .arg(&command_session)
+            .assert()
+            .success();
+
+        s.cmd("activatecredential")
+            .arg("-c")
+            .arg(SwtpmSession::file_ref(&ak_context))
+            .arg("-C")
+            .arg(SwtpmSession::file_ref(&ek_context))
+            .arg("-i")
+            .arg(&credential)
+            .arg("-o")
+            .arg(s.tmp().path().join("session-recovered.bin"))
             .arg("--session")
             .arg(&command_session)
             .assert()
             .success();
-        assert_eq!(s.read_file(&recovered), b"secret credential");
 
         s.cmd("pcrreset")
             .arg("16")
@@ -57,22 +82,7 @@ mod activatecredential {
     #[test]
     fn activatecredential_corrupted_blob_fails() {
         let s = SwtpmSession::new();
-        let (ek_ctx, ek_pub, ak_ctx, ak_name) = s.create_credential_keys();
-
-        let secret = s.write_tmp_file("secret.bin", b"secret credential!");
-        let cred_blob = s.tmp().path().join("cred_blob.bin");
-        s.cmd("makecredential")
-            .arg("-u")
-            .arg(&ek_pub)
-            .arg("-s")
-            .arg(&secret)
-            .arg("-n")
-            .arg(&ak_name)
-            .arg("-o")
-            .arg(&cred_blob)
-            .assert()
-            .success();
-
+        let (ek_ctx, ak_ctx, cred_blob) = setup_credential(&s);
         let bad_blob = s.corrupt_file(&cred_blob, "cred_blob_bad.bin", 10);
 
         s.cmd("activatecredential")
