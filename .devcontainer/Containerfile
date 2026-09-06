@@ -1,8 +1,10 @@
-FROM rust:1.95@sha256:4a7e3a0c309c9bab658e469f842711bd595fae484936bc5d605e08ca0c631bf4
+FROM rust:1.98.0-trixie@sha256:620dbcd124499c59e2406d3741574b5c5838cf9eb9656f0c3a03948f79b02959
 
 ARG TPM2_TSS_VERSION=506c5e6db0c8514f321dc16a0da2580483f3df04   # version 4.2.0
 
-RUN rustup component add rustfmt clippy && cargo install cargo-rdme
+RUN rustup component add rustfmt clippy \
+    && cargo install --locked cargo-rdme \
+    && cargo install --locked cargo-llvm-cov
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         autoconf autoconf-archive automake build-essential ca-certificates curl \
