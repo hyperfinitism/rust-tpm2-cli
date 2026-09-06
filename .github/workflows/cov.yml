@@ -1,0 +1,66 @@
+name: Coverage
+
+on:
+  push:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/actions/install-tpm2-tss/**'
+      - '.github/workflows/cov.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/actions/install-tpm2-tss/**'
+      - '.github/workflows/cov.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          toolchain: stable
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6 # v2.87.7
+        with:
+          tool: cargo-llvm-cov
+      - name: Install tpm2-tss
+        uses: ./.github/actions/install-tpm2-tss
+      # run: sudo apt-get update && sudo apt-get install -y libtss2-dev pkg-config
+      - name: Install swtpm
+        run: sudo apt-get update && sudo apt-get install -y swtpm
+      - name: Generate HTML coverage report
+        run: cargo llvm-cov --html
+      - name: Generate LCOV coverage report
+        run: cargo llvm-cov report --lcov --output-path target/llvm-cov/lcov.info
+      - name: Upload HTML coverage report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: llvm-cov-html
+          path: target/llvm-cov/html
+          if-no-files-found: error
+      - name: Upload LCOV coverage report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: llvm-cov-lcov
+          path: target/llvm-cov/lcov.info
+          if-no-files-found: error
