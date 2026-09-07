@@ -5,11 +5,13 @@ on:
     paths:
       - "src/**"
       - "tests/**"
+      - "xtask/**"
       - ".github/workflows/spdx.yml"
   push:
     paths:
       - "src/**"
       - "tests/**"
+      - "xtask/**"
       - ".github/workflows/spdx.yml"
   workflow_dispatch:
 

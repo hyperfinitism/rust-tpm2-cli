@@ -1,14 +1,39 @@
+[workspace]
+members = ["xtask"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.88.0"
+repository = "https://github.com/hyperfinitism/rust-tpm2-cli"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+anyhow = "1.0.102"
+assert_cmd = "2.2.0"
+clap = "4.6.6"
+flexi_logger = "0.31.8"
+hex = "0.4.3"
+log = "0.4.29"
+tempfile = "3.27.0"
+serde = "1.0.228"
+serde_json = "1.0.149"
+sha2 = "0.10.9"
+socket2 = "0.6.3"
+thiserror = "2.0.18"
+tss-esapi = { git = "https://github.com/parallaxsecond/rust-tss-esapi", rev = "28f40f015124230699d462d40ba0666ddfef7c87" }
+
 [package]
 name = "tpm2-cli"
 version = "0.1.0"
-edition = "2024"
-rust-version = "1.88.0"
+edition.workspace = true
+rust-version.workspace = true
 description = "Rust-based CLI tools for Trusted Platform Module 2.0"
 # documentation = ""
 readme = "README.md"
 # homepage = ""
-repository = "https://github.com/hyperfinitism/rust-tpm2-cli"
-license = "Apache-2.0"
+repository.workspace = true
+license.workspace = true
 # keywords = []
 # categories = []
 include = ["src/**/*", "LICENSE"]
@@ -18,18 +43,18 @@ name = "tpm2"
 path = "src/main.rs"
 
 [dependencies]
-anyhow = "1.0.102"
-clap = { version = "4.5.60", features = ["derive", "env"] }
-flexi_logger = "0.31.8"
-hex = "0.4.3"
-log = "0.4.29"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
-thiserror = "2.0.18"
-tss-esapi = { git = "https://github.com/parallaxsecond/rust-tss-esapi", rev = "28f40f015124230699d462d40ba0666ddfef7c87", features = ["serde"] }
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive", "env"] }
+flexi_logger.workspace = true
+hex.workspace = true
+log.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tss-esapi = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
-assert_cmd = "2.2.0"
-sha2 = "0.10.9"
-socket2 = "0.6.3"
-tempfile = "3.27.0"
+assert_cmd.workspace = true
+sha2.workspace = true
+socket2.workspace = true
+tempfile.workspace = true

@@ -67,6 +67,22 @@ cargo build --release
 # => ./target/release/tpm2
 ```
 
+### Generate man pages
+
+You can generate the `tpm2(1)` page and one page for each subcommand directly from the `clap` command definitions:
+
+```bash
+cargo xtask manpages
+# => ./target/man/tpm2.1
+# => ./target/man/tpm2-<subcommand>.1
+```
+
+Use `--out-dir` to select another output directory:
+
+```bash
+cargo xtask manpages --out-dir ./man
+```
+
 ### Configure TCTI
 
 The [TPM Command Transmission Interface (TCTI)](https://trustedcomputinggroup.org/resource/tss-tcti-specification/) is the abstraction layer within the TPM Software Stack (TSS) that defines how commands are transmitted to a TPM device.
