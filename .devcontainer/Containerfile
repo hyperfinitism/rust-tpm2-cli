@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         autoconf autoconf-archive automake build-essential ca-certificates curl \
         doxygen git gnupg libcmocka-dev libcmocka0 libcurl4-openssl-dev libftdi-dev \
         libini-config-dev libjson-c-dev libltdl-dev libssl-dev libtool libusb-1.0-0-dev \
-        pkg-config swtpm swtpm-tools uthash-dev uuid-dev \
+        man pkg-config swtpm swtpm-tools uthash-dev uuid-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN git clone --filter=blob:none https://github.com/tpm2-software/tpm2-tss /tmp/tpm2-tss \

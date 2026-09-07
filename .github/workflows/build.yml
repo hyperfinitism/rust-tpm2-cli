@@ -3,14 +3,18 @@ name: Build
 on:
   pull_request:
     paths:
+      - '.cargo/**'
       - 'src/**'
+      - 'xtask/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/actions/install-tpm2-tss/**'
       - '.github/workflows/build.yml'
   push:
     paths:
+      - '.cargo/**'
       - 'src/**'
+      - 'xtask/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/actions/install-tpm2-tss/**'
