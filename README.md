@@ -1,3 +1,5 @@
+<!-- cargo-rdme start -->
+
 # rust-tpm2-cli
 
 ![SemVer: pre-release](https://img.shields.io/badge/tpm2--cli-pre--release-ffc0cb)
@@ -146,8 +148,9 @@ It is also useful for trying out `rust-tpm2-cli` on environments without a platf
 # Install swtpm
 sudo apt install -y swtpm
 
-# Start swtpm
 mkdir -p /tmp/swtpm
+
+# Start swtpm
 swtpm socket \
     --tpm2 \
     --tpmstate dir=/tmp/swtpm \
@@ -159,10 +162,21 @@ swtpm socket \
 export RUST_TPM2_CLI_TCTI="swtpm:host=localhost,port=2321"
 ```
 
+```bash
+swtpm socket \
+    --tpm2 \
+    --tpmstate dir=/tmp/swtpm \
+    --server type=unixio,path=/tmp/swtpm/swtpm.sock \
+    --ctrl type=unixio,path=/tmp/swtpm/swtpm.sock.ctrl \
+    --flags startup-clear
+
+export RUST_TPM2_CLI_TCTI="swtpm:path=/tmp/swtpm/swtpm.sock"
+```
+
 ## Usage
 
 ```bash
-tpm2 [GLOBAL_OPTIONS...] <subcommand> [SUBCOMMAND_OPTIONS]
+tpm2 [GLOBAL_OPTIONS...] <subcommand> [SUBCOMMAND_OPTIONS...]
 ```
 
 For a full list of subcommands:
@@ -180,8 +194,18 @@ tpm2 <subcommand> -h
 ### TPM Capabilities
 
 ```bash
-# Print all supported capability names (ecc-curves, handles-persistent, ...)
+# Print all supported queries
 tpm2 getcap --list
+
+# Supported TPM 2.0 commands
+tpm2 getcap commands
+
+# Available PCR bank
+tpm2 getcap pcrs
+
+# Fixed and variable properties
+tpm2 getcap properties-fixed
+tpm2 getcap properties-variable
 
 # Supported elliptic curves for cryptography
 tpm2 getcap ecc-curves
@@ -191,9 +215,6 @@ tpm2 getcap handles-persistent
 
 # NV index handles
 tpm2 getcap handles-nv-index
-
-# PCR handles (typically 0x0..0x17, i.e., 0..23)
-tpm2 getcap handles-pcr
 ```
 
 ### Random
@@ -218,10 +239,10 @@ tpm2 hash message.dat -g sha384 -o digest.bin -t ticket.bin
 tpm2 createprimary -C o -G ecc -c primary.ctx
 
 # Create an unrestricted signing key
-tpm2 create -C file:primary.ctx -G ecc -u key.pub -r key.priv
+tpm2 create -C file:primary.ctx -G ecc -r key.priv -u key.pub
 
 # Load the signing key
-tpm2 load -C file:primary.ctx -u key.pub -r key.priv -c key.ctx
+tpm2 load -C file:primary.ctx -r key.priv -u key.pub -c key.ctx
 
 # Hash a message
 echo -n "message" > message.dat
@@ -231,37 +252,54 @@ tpm2 hash message.dat -g sha256 -o digest.bin
 tpm2 sign -c file:key.ctx -g sha256 -s ecdsa -d digest.bin -o sig.bin
 
 # Verify
-tpm2 verifysignature -c file:key.ctx -g sha256 -m message.dat -s sig.bin
+tpm2 verifysignature -k key.pub -g sha256 -m message.dat -s sig.bin
 tpm2 verifysignature -c file:key.ctx -d digest.bin -s sig.bin
 ```
 
 ### Attestation
 
 ```bash
-# Create and persist an Endorsement Key (EK)
-tpm2 createek -c ek.ctx -G ecc -u ek.pub
-tpm2 evictcontrol 0x81010002 -C o -c file:ek.ctx
+# Create EK
+tpm2 createek -G ecc -c ek.ctx -u ek.pub
+tpm2 evictcontrol 0x81010002 -c file:ek.ctx -C o
 
-# Create and persist an Attestation Key (AK) 
-tpm2 createak -C file:ek.ctx -c ak.ctx -G ecc -u ak.pub
-tpm2 evictcontrol 0x81000002 -C o -c file:ak.ctx
+# Create AK
+tpm2 createak -C hex:0x81010002 -c ak.ctx -G ecc -g sha256 -u ak.pub -n ak.name
+tpm2 evictcontrol 0x81000002 -c file:ak.ctx -C o
 
 # Generate a nonce for freshness
 tpm2 getrandom 32 -o nonce.bin
 
 # Quote PCRs 0–7 signed by the AK
-tpm2 quote -c hex:0x81000002 -l sha256:0,1,2,3,4,5,6,7 \
-    -q file:nonce.bin \
-    -m quote.bin -s sig.bin -o pcrs.bin
+tpm2 quote -c hex:0x81000002 -l sha256:0,1,2,3,4,5,6,7 -q file:nonce.bin -m quote.bin -s sig.bin -o pcrs.bin
 
 # Verify the quote
-tpm2 checkquote -u hex:0x81000002 -m quote.bin -s sig.bin \
-    -l sha256:0,1,2,3,4,5,6,7 \
-    -q file:nonce.bin \
-    -f pcrs.bin
-
+tpm2 checkquote -u hex:0x81000002 -m quote.bin -s sig.bin -f pcrs.bin -l sha256:0,1,2,3,4,5,6,7 -q file:nonce.bin
+    
 # Verify quote signature only
-tpm2 verifysignature -c file:ak.ctx -g sha256 -m quote.bin -s sig.bin
+tpm2 verifysignature -k ak.pub -g sha256 -m quote.bin -s sig.bin
+```
+
+### Credential activation
+
+```bash
+# Create EK
+tpm2 createek -G ecc -c ek.ctx -u ek.pub
+tpm2 evictcontrol 0x81010002 -c file:ek.ctx -C o
+
+# Create AK
+tpm2 createak -C hex:0x81010002 -c ak.ctx -G ecc -g sha256 -u ak.pub -n ak.name
+tpm2 evictcontrol 0x81000002 -c file:ak.ctx -C o
+
+# Make credential
+tpm2 getrandom 32 -o secret.bin
+tpm2 makecredential -u ek.pub -s secret.bin -n ak.name -o cred_blob.bin
+
+# Activate credential
+tpm2 activatecredential -c hex:0x81000002 -C hex:0x81010002 -i cred_blob.bin -o cert_info.bin
+
+# Verify
+diff cert_info.bin secret.bin -s
 ```
 
 ### Signed timestamp
@@ -271,36 +309,77 @@ tpm2 verifysignature -c file:ak.ctx -g sha256 -m quote.bin -s sig.bin
 tpm2 createprimary -C o -G ecc -c primary.ctx
 
 # Create an unrestricted signing key
-tpm2 create -C file:primary.ctx -G ecc -u key.pub -r key.priv
+tpm2 create -C file:primary.ctx -G ecc -r key.priv -u key.pub
 
 # Load the signing key
-tpm2 load -C file:primary.ctx -u key.pub -r key.priv -c key.ctx
+tpm2 load -C file:primary.ctx -r key.priv -u key.pub -c key.ctx
 
 # Generate a nonce for freshness
 tpm2 getrandom 32 -o nonce.bin
 
 # Get signed timestamp
-tpm2 gettime -c file:key.ctx -g sha256 -q file:nonce.bin -o time-attest.bin -s time-sig.bin
+tpm2 gettime -c file:key.ctx -g sha256 -q file:nonce.bin -o time.bin -s sig.bin
 
 # Verify signature
-tpm2 verifysignature -c file:key.ctx -g sha256 -m time-attest.bin -s time-sig.bin
+tpm2 verifysignature -k key.pub -g sha256 -m time.bin -s sig.bin
 ```
 
 ### NV indexes
 
-```bash
-# Define NV index
-tpm2 nvdefine 0x01400002 -s 64 -C o
+#### Ordinary NV index
 
-# Write binary file to NV index
-openssl rand 64 > random.bin
-tpm2 nvwrite 0x01400002 -i random.bin -C o
+```bash
+# Define (ordinary) NV index
+tpm2 nvdefine 0x01000001 -C o -s 64
+
+# Write data to NV index
+echo "hello world" > data.bin
+tpm2 nvwrite 0x01000001 -C o -i data.bin
 
 # Read data from NV index
-tpm2 nvread 0x01400002 -C o
+tpm2 nvread 0x01000001 -C o
+tpm2 nvread 0x01000001 -C o -s $(stat -c %s data.bin) -o nv.bin
+diff nv.bin data.bin -s
 
 # Undefine NV index
-tpm2 nvundefine 0x01400002 -C o
+tpm2 nvundefine 0x01000001 -C o
+```
+
+#### NV extend index
+
+Like PCRs, NV extend indices can store hash chains.
+The only permitted write operation is the extension of the hash chain.
+The size parameter `-s` must be consistent with the hash algorithm parameter `-g`.
+
+```bash
+# Define NV extend index
+tpm2 nvdefine 0x01000001 -C o -s 48 -g sha384 -a "nt=extend|ownerwrite|ownerread"
+
+# Extend PCR-like NV index
+for i in {0..4}
+do
+  openssl rand 48 > random.bin
+  tpm2 nvextend 0x01000001 -C o -i random.bin
+  tpm2 nvread 0x01000001 -C o
+done
+
+tpm2 nvundefine 0x01000001 -C o
+```
+
+#### NV Counter Index
+
+```bash
+# Define counter NV index
+tpm2 nvdefine 0x01000001 -C o -s 8 -a "nt=counter|ownerwrite|ownerread"
+
+# Increment counter NV index
+for i in {0..4}
+do
+  tpm2 nvincrement 0x01000001 -C o
+  tpm2 nvread 0x01000001 -C o
+done
+
+tpm2 nvundefine 0x01000001 -C o
 ```
 
 ### PCRs
@@ -374,3 +453,5 @@ Detailed `Debug` and `Trace` instrumentation is not yet comprehensive and remain
 
 - The source code is licensed under [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0).
 - The project logo assets are licensed under [CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/).
+
+<!-- cargo-rdme end -->

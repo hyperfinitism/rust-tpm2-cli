@@ -1,0 +1,78 @@
+name: Documentation Check
+
+on:
+  pull_request:
+    paths:
+      - '.cargo/**'
+      - 'src/**'
+      - 'xtask/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'README.md'
+      - '.cargo-rdme.toml'
+      - '.github/actions/install-tpm2-tss/**'
+      - '.github/workflows/docs.yml'
+  push:
+    paths:
+      - '.cargo/**'
+      - 'src/**'
+      - 'xtask/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'README.md'
+      - '.cargo-rdme.toml'
+      - '.github/actions/install-tpm2-tss/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  manpage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup Rust toolchain with rustfmt
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          toolchain: stable
+      - name: Install tpm2-tss
+        uses: ./.github/actions/install-tpm2-tss
+      # run: sudo apt-get update && sudo apt-get install -y libtss2-dev pkg-config
+      - name: Check clap_mangen
+        run: cargo xtask manpages
+  rustdoc:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup Rust toolchain with rustfmt
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          toolchain: stable
+      - name: Install tpm2-tss
+        uses: ./.github/actions/install-tpm2-tss
+      # run: sudo apt-get update && sudo apt-get install -y libtss2-dev pkg-config
+      - name: Check Rustdoc
+        run: cargo doc --no-deps
+  rdme:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup Rust toolchain with rustfmt
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          toolchain: stable
+      - name: Install cargo-rdme
+        uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6 # v2.87.7
+        with:
+          tool: cargo-rdme
+      - name: Check README
+        run: cargo rdme --check

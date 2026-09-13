@@ -38,6 +38,9 @@ license.workspace = true
 # categories = []
 include = ["src/**/*", "LICENSE"]
 
+[lib]
+doc = false
+
 [[bin]]
 name = "tpm2"
 path = "src/main.rs"
