@@ -1,3 +1,5 @@
+<!-- cargo-rdme start -->
+
 # rust-tpm2-cli
 
 ![SemVer: pre-release](https://img.shields.io/badge/tpm2--cli-pre--release-ffc0cb)
@@ -451,3 +453,5 @@ Detailed `Debug` and `Trace` instrumentation is not yet comprehensive and remain
 
 - The source code is licensed under [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0).
 - The project logo assets are licensed under [CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/).
+
+<!-- cargo-rdme end -->
