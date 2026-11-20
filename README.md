@@ -21,7 +21,7 @@ The `rust-tpm2-cli` crate provides a suite of Rust-based command-line tools for 
 ### Install dependencies
 
 - [Rust](https://rust-lang.org/): v1.88.0 or later
-- [tpm2-tss](https://github.com/tpm2-software/tpm2-tss): v4.2.0 or later (C library)
+- [tpm2-tss](https://github.com/tpm2-software/tpm2-tss): v4.2.2 or later (C library)
 
 Install the latest Rust toolchain:
 
@@ -49,7 +49,7 @@ sudo apt install -y \
 # Clone latest main and build
 git clone --filter=blob:none https://github.com/tpm2-software/tpm2-tss
 cd tpm2-tss
-git checkout 506c5e6db0c8514f321dc16a0da2580483f3df04   # tag: 4.2.0
+git checkout bcc9cdaf490dadb368db4250fb7912cedfd14346   # tag: 4.2.2s
 ./bootstrap
 ./configure --prefix=/usr \
     --disable-fapi --disable-weakcrypto --disable-integration

@@ -5,7 +5,7 @@ inputs:
   version:
     description: "The version (tag, branch or commit SHA) of tpm2-tss to install"
     required: false
-    default: "506c5e6db0c8514f321dc16a0da2580483f3df04" # 4.2.0
+    default: "bcc9cdaf490dadb368db4250fb7912cedfd14346" # 4.2.2
 
 runs:
   using: "composite"
